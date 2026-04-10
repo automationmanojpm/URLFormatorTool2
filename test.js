@@ -73,8 +73,11 @@ function parseInput(text, formatHint = 'auto') {
   return text.split('\n').map(l => l.trim().replace(/^["']+|["']+$/g, '').trim()).filter(Boolean);
 }
 
+/**
+ * Same rule as app.js: do not split at https:// immediately after `=` (query param value).
+ */
 function splitGlued(value) {
-  return value.split(/(?=https?:\/\/)/i).map(s => s.trim()).filter(Boolean);
+  return value.split(/(?<!=)(?=https?:\/\/)/i).map(s => s.trim()).filter(Boolean);
 }
 
 const DEFAULT_OPTS = {
@@ -107,7 +110,17 @@ function cleanEntry(raw, opts = DEFAULT_OPTS) {
   const slashIdx = s.indexOf('/');
   let hostPort = slashIdx !== -1 ? s.slice(0, slashIdx) : s;
   let path     = slashIdx !== -1 ? s.slice(slashIdx) : '';
-  if (opts.stripWildcards) path = path.replace(/(\/?\*)+$/g, '').replace(/\/+$/, '');
+  if (opts.stripWildcards) {
+    const pq = path.indexOf('?');
+    if (pq === -1) {
+      path = path.replace(/(\/?\*)+$/g, '').replace(/\/+$/, '');
+    } else {
+      let pathOnly = path.slice(0, pq);
+      const queryOnly = path.slice(pq);
+      pathOnly = pathOnly.replace(/(\/?\*)+$/g, '').replace(/\/+$/, '');
+      path = pathOnly + queryOnly;
+    }
+  }
   if (opts.stripPaths) path = '';
   const host      = hostPort.split(':')[0];
   const hostClean = host.replace(/^\.+/, '');
@@ -208,12 +221,12 @@ testParse('iOS / MDM unquoted bracket list',
 );
 
 function toIosManagedAppConfigArray(arr) {
-  if (arr.length === 0) return '[]';
-  return '[' + arr.map(v => String(v)).join(',') + ']';
+  if (arr.length === 0) return '';
+  return arr.map(v => String(v)).join(',');
 }
 
 const iosFmt = toIosManagedAppConfigArray(['https://a.com', 'b.com']);
-if (iosFmt === '[https://a.com,b.com]') {
+if (iosFmt === 'https://a.com,b.com') {
   console.log('  ✓ toIosManagedAppConfigArray');
   pass++;
 } else {
@@ -458,6 +471,25 @@ const pieces = splitGlued(glued);
 const gluedOk = JSON.stringify(pieces) === JSON.stringify(['https://a.com', 'https://b.com']);
 if (gluedOk) { console.log('  ✓ Glued URLs split correctly'); pass++; }
 else { console.log(`  ✗ Glued split: expected ["https://a.com","https://b.com"] got ${JSON.stringify(pieces)}`); fail++; }
+
+const oauthRedirect =
+  'https://api.digitallocker.gov.in/public/oauth2/1/authorize?response_type=code&client_id=55A0C201&redirect_uri=https://uat.fmreporting.idfcfirstbank.com/IDFCAPPS/DIGILOCKER/DigiResponse.aspx&state=SFDC_CA_DEV';
+const oauthPieces = splitGlued(oauthRedirect);
+const oauthOk = oauthPieces.length === 1 && oauthPieces[0] === oauthRedirect;
+if (oauthOk) { console.log('  ✓ OAuth redirect_uri: single URL (no split on nested https://)'); pass++; }
+else {
+  console.log(`  ✗ OAuth split: expected 1 piece, got ${JSON.stringify(oauthPieces)}`);
+  fail++;
+}
+
+const oauthTrailing = oauthRedirect + '/*';
+const oauthTrailPieces = splitGlued(oauthTrailing);
+const oauthTrailOk = oauthTrailPieces.length === 1 && oauthTrailPieces[0] === oauthTrailing;
+if (oauthTrailOk) { console.log('  ✓ OAuth URL with trailing */ still one piece before cleanEntry'); pass++; }
+else {
+  console.log(`  ✗ OAuth trailing */ split: got ${JSON.stringify(oauthTrailPieces)}`);
+  fail++;
+}
 
 
 console.log('\n═══ DEDUPLICATION ═══\n');

@@ -46,7 +46,7 @@ All processing runs **entirely in your browser**—nothing is uploaded to a serv
 ### Output tabs
 
 - **Final List** — shape depends on the active **quick preset** (Edge-style bare + `https://` only when a port is present, full HTTPS list, or domains-focused mix).
-- **Final (iOS)** — same URLs as **Final List**, one line: `[https://…,https://…]` without JSON string quotes (for some Apple / MDM string-array fields). Download as `.txt`; not valid JSON.
+- **Final (iOS)** — same URLs as **Final List**, one line: `https://…,https://…` (comma-separated, no surrounding `[]`, no JSON string quotes). Download as `.txt`; not valid JSON.
 - **With Scheme** — `https://…` for each entry that has a synthetic or normalized scheme (bare schemeless hosts are omitted here when **Add `https://`** is off).
 - **No Scheme** — bare host/path; URLs with explicit ports are omitted here (not representable as a single bare host+port string in that list).
 - **Ports Only** — entries that include an explicit `:port`.

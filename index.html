@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <title>URL Formatter — URL lists for managed app configuration</title>
-  <link rel="stylesheet" href="style.css?v=1.3.9" />
+  <link rel="stylesheet" href="style.css?v=1.3.12" />
 </head>
 <body>
 
@@ -294,13 +294,14 @@
           Final List
           <span class="tab-badge tab-badge-final" id="badge-final-list">0</span>
         </button>
-        <button class="tab tab-final-ios" type="button" data-tab="final-list-ios" title="Final List as [https://…,https://…] for iOS / MDM managed app config (unquoted)">
+        <button class="tab tab-final-ios" type="button" data-tab="final-list-ios" title="Final List as https://…,https://… (comma-separated, no brackets) for iOS / MDM">
           Final (iOS)
           <span class="tab-badge tab-badge-final-ios" id="badge-final-list-ios">0</span>
         </button>
         <button class="tab" data-tab="with-scheme">With Scheme <span class="tab-badge" id="badge-with-scheme">0</span></button>
         <button class="tab" data-tab="no-scheme">No Scheme <span class="tab-badge" id="badge-no-scheme">0</span></button>
         <button class="tab" data-tab="ports-only">Ports Only <span class="tab-badge" id="badge-ports-only">0</span></button>
+        <button class="tab" type="button" data-tab="wildcard-log" title="Accepted URLs where *, /*, or *. glob rules changed the value">Wildcard log <span class="tab-badge tab-badge-wildcard" id="badge-wildcard-log">0</span></button>
         <button class="tab" data-tab="skipped-list">Skipped <span class="tab-badge tab-badge-warn" id="badge-skipped">0</span></button>
       </div>
       </div>
@@ -340,7 +341,7 @@
 
       <div class="tab-panel" id="panel-final-list-ios">
         <div class="output-toolbar">
-          <span class="output-desc"><strong>Final List (iOS / MDM).</strong> Same URLs and order as <strong>Final List</strong>, as one string: <code>[https://host/a,https://host/b]</code> — no JSON quotes. Matches many managed app config / string-array paste fields. <em>Not valid JSON.</em></span>
+          <span class="output-desc"><strong>Final List (iOS / MDM).</strong> Same URLs and order as <strong>Final List</strong>, as one line: <code>https://host/a,https://host/b</code> — comma-separated, no surrounding <code>[]</code>, no JSON quotes. <em>Not valid JSON.</em></span>
           <div class="output-actions">
             <button type="button" class="btn btn-ghost btn-sm" data-copy="final-list-ios">Copy</button>
             <button type="button" class="btn btn-ghost btn-sm" data-download="final-list-ios">Download .txt</button>
@@ -382,6 +383,17 @@
         <textarea class="output-textarea" id="out-ports-only" readonly spellcheck="false"></textarea>
       </div>
 
+      <div class="tab-panel" id="panel-wildcard-log">
+        <div class="output-toolbar">
+          <span class="output-desc">Accepted entries where wildcard or glob normalization ran (e.g. <code>*.</code> host prefix, trailing <code>/*</code> on the path, query <code>*</code> cleanup). <strong>Columns:</strong> <strong>In</strong> (original line), <strong>Out</strong> (normalized), <strong>Rules applied</strong> — tab-separated so rows align and paste into Excel or Sheets.</span>
+          <div class="output-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-copy="wildcard-log">Copy</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-download="wildcard-log">Download .txt</button>
+          </div>
+        </div>
+        <textarea class="output-textarea output-textarea--tsv" id="out-wildcard-log" readonly spellcheck="false"></textarea>
+      </div>
+
       <div class="tab-panel" id="panel-skipped-list">
         <div class="output-toolbar">
           <span class="output-desc">Entries that were skipped — invalid format, non-HTTP schemes, or app identifiers.</span>
@@ -408,6 +420,6 @@
 
   <div class="toast hidden" id="toast">Copied to clipboard!</div>
 
-  <script src="app.js?v=1.3.0"></script>
+  <script src="app.js?v=1.3.5"></script>
 </body>
 </html>

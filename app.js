@@ -1,7 +1,7 @@
 'use strict';
 
 /** Release version — bump for fixes/features; update CHANGELOG.md and `?v=` on app.js + style.css in index.html. */
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.5';
 
 /** Full URL lists per output tab — used for output search / filter */
 const lastOutputArrays = {
@@ -10,6 +10,7 @@ const lastOutputArrays = {
   'with-scheme': [],
   'no-scheme': [],
   'ports-only': [],
+  'wildcard-log': [],
   'skipped-list': [],
 };
 
@@ -108,8 +109,12 @@ function parseCsvRow(text) {
    SPLITTING — handle glued URLs (https://a...https://b)
    ══════════════════════════════════════════════ */
 
+/**
+ * Split concatenated URLs (e.g. …comhttps://…) but not nested https:// inside a query value
+ * (e.g. redirect_uri=https://…) — OAuth and similar use `=` before the inner scheme.
+ */
 function splitGlued(value) {
-  return value.split(/(?=https?:\/\/)/i).map(s => s.trim()).filter(Boolean);
+  return value.split(/(?<!=)(?=https?:\/\/)/i).map(s => s.trim()).filter(Boolean);
 }
 
 /* ══════════════════════════════════════════════
@@ -119,32 +124,68 @@ function splitGlued(value) {
 const APP_TLDS = new Set(['controller', 'mpassplus', 'android', 'ios']);
 
 /**
- * Returns { withScheme, noScheme, hasPort } or null if invalid.
+ * Remove query params whose entire value is a lone `*` (DigiLocker-style placeholders),
+ * without touching values like `state=SFDC_CA_DEV/*`.
+ */
+function normalizeQueryWildcardOnlyStars(query) {
+  if (!query || query[0] !== '?') return query;
+  let q = query;
+  while (/&[^&=]+=\*$/.test(q)) {
+    q = q.replace(/&[^&=]+=\*$/, '');
+  }
+  const single = q.match(/^\?([^=&]+)=\*$/);
+  if (single) return `?${single[1]}`;
+  return q;
+}
+
+/**
+ * Returns { withScheme, noScheme, hasPort, wildcardLog } or null if invalid.
+ * `wildcardLog` is a short human-readable summary when *, /*, or *. glob rules changed the URL.
  */
 function cleanEntry(raw, opts) {
+  const wcNotes = [];
   let s = raw.trim().replace(/,+$/, '');
 
   // Strip surrounding quotes that may survive CSV/line parsing
   s = s.replace(/^["']+|["']+$/g, '').trim();
 
   // Strip leading glob * before a scheme letter
-  s = s.replace(/^\*+(?=[a-zA-Z])/g, '').trim();
+  {
+    const before = s;
+    s = s.replace(/^\*+(?=[a-zA-Z])/g, '').trim();
+    if (s !== before) wcNotes.push('removed leading * before scheme');
+  }
 
   // Remove all whitespace
   s = s.replace(/\s+/g, '');
 
-  // Strip trailing wildcards and slashes (e.g. /* or *)
-  const hadTrailingWildcard = /\*$/.test(s);
-  s = s.replace(/[/*]+$/, '').trim();
+  // Strip trailing wildcards/slashes from the path only (before `?`), so query values
+  // like `state=SFDC_CA_DEV/*` stay intact. Lone-* placeholder params are handled below.
+  const qMark = s.indexOf('?');
+  let basePart = qMark === -1 ? s : s.slice(0, qMark);
+  let queryPart = qMark === -1 ? '' : s.slice(qMark);
+  const hadTrailingWildcard = /\*$/.test(basePart);
+  {
+    const before = basePart;
+    basePart = basePart.replace(/[/*]+$/, '').trim();
+    if (basePart !== before) wcNotes.push('removed trailing / or * from path (before ?)');
+  }
+  if (queryPart) {
+    const beforeQ = queryPart;
+    queryPart = normalizeQueryWildcardOnlyStars(queryPart);
+    if (queryPart !== beforeQ) wcNotes.push('normalized query param(s) with lone * value');
+  }
+  s = basePart + queryPart;
 
-  // Only clean up orphaned query artefacts when a trailing * was actually removed.
-  // e.g. ?app_id=*  → strip * → ?app_id=  → clean → ?app_id
-  //      ?a=1&b=*   → strip * → ?a=1&b=   → clean → ?a=1
-  // Genuine incomplete queries (?token= with no preceding *) are left for the later filter.
+  // Only clean up orphaned path/query artefacts when a trailing * was removed from the path.
+  // e.g. path …/foo?app_id=* — * removed from path? No; lone * in query handled by normalizeQueryWildcardOnlyStars.
+  // Legacy: path ended with /* → query orphan cleanup on full string.
   if (hadTrailingWildcard) {
+    const beforeO = s;
     s = s.replace(/(?:&[^&=]*=?)$/, ''); // strip trailing &key= or &key artefact
     s = s.replace(/[=&?]+$/, '').trim(); // strip remaining orphaned = & ?
-    s = s.replace(/\?$/, '').trim();     // strip empty query marker
+    s = s.replace(/\?$/, '').trim(); // strip empty query marker
+    if (s !== beforeO) wcNotes.push('cleaned trailing query fragment after path wildcard removal');
   }
 
   if (!s) return null;
@@ -171,8 +212,10 @@ function cleanEntry(raw, opts) {
 
   // Strip wildcard host prefixes: *.domain.com → domain.com
   if (opts.stripWildcards) {
+    const beforeW = s;
     s = s.replace(/^(\*\.)+/g, '');
     s = s.replace(/^\*+/g, '');
+    if (s !== beforeW) wcNotes.push('stripped *. or * wildcard host prefix');
   }
 
   // Strip www.
@@ -187,9 +230,19 @@ function cleanEntry(raw, opts) {
   let hostPort = slashIdx !== -1 ? s.slice(0, slashIdx) : s;
   let path = slashIdx !== -1 ? s.slice(slashIdx) : '';
 
-  // Strip remaining inline wildcards from path
+  // Strip remaining inline wildcards from pathname only (not query — e.g. state=…/*)
   if (opts.stripWildcards) {
-    path = path.replace(/(\/?\*)+$/g, '').replace(/\/+$/, '');
+    const beforePath = path;
+    const pq = path.indexOf('?');
+    if (pq === -1) {
+      path = path.replace(/(\/?\*)+$/g, '').replace(/\/+$/, '');
+    } else {
+      let pathOnly = path.slice(0, pq);
+      const queryOnly = path.slice(pq);
+      pathOnly = pathOnly.replace(/(\/?\*)+$/g, '').replace(/\/+$/, '');
+      path = pathOnly + queryOnly;
+    }
+    if (path !== beforePath) wcNotes.push('removed trailing path wildcards (/* …) from pathname');
   }
 
   // Strip paths if option enabled
@@ -232,8 +285,21 @@ function cleanEntry(raw, opts) {
   const omitSyntheticHttps = !opts.addScheme && !hadHttpFamily && !hasPort;
   const withScheme = omitSyntheticHttps ? null : dedupKey;
 
-  return { withScheme, noScheme, hasPort, raw, dedupKey };
+  const wildcardLog = wcNotes.length ? wcNotes.join(' · ') : null;
+  return { withScheme, noScheme, hasPort, raw, dedupKey, wildcardLog };
 }
+
+/** Tab-separated row for wildcard log; normalizes tabs/newlines inside cells so each entry stays one line. */
+function wildcardLogTsvRow(piece, dedupKey, wildcardLog) {
+  const cell = s =>
+    String(s)
+      .replace(/\t/g, ' ')
+      .replace(/\r\n|\r|\n/g, ' ');
+  return [cell(piece), cell(dedupKey), cell(wildcardLog)].join('\t');
+}
+
+/** First line of wildcard log textarea (not included in `lastOutputArrays['wildcard-log']` for filtering). */
+const WILDCARD_LOG_TSV_HEADER = 'In\tOut\tRules applied';
 
 /* ══════════════════════════════════════════════
    PROCESSING — orchestrate everything
@@ -249,6 +315,8 @@ function process(inputText, opts) {
     portsOnly: [],
     finalList: [],      // shape from opts.finalListPreset: full-https → all withScheme; else bare + https for ports
     finalPortCount: 0,  // entries with explicit :port (for legend / summary)
+    /** One tab-separated row per accepted URL where glob/wildcard rules changed the input (In, Out, rules) */
+    wildcardNotes: [],
     skipped: [],
     totalInput: 0,
     validCount: 0,   // all successfully cleaned URLs, regardless of which outputs are on
@@ -279,7 +347,7 @@ function process(inputText, opts) {
       continue;
     }
 
-    const { withScheme, noScheme, hasPort, dedupKey } = cleaned;
+    const { withScheme, noScheme, hasPort, dedupKey, wildcardLog } = cleaned;
 
     const isDup = opts.dedup && seenWith.has(dedupKey);
     if (isDup) {
@@ -288,6 +356,10 @@ function process(inputText, opts) {
     }
     seenWith.add(dedupKey);
     results.validCount++;
+
+    if (wildcardLog) {
+      results.wildcardNotes.push(wildcardLogTsvRow(piece, dedupKey, wildcardLog));
+    }
 
     if (opts.outWithScheme && withScheme) {
       results.withScheme.push(withScheme);
@@ -337,10 +409,10 @@ function toJson(arr, compact) {
   return JSON.stringify(arr, null, 2);
 }
 
-/** Same order as Final List; unquoted bracket string for some managed app config string-array fields. */
+/** Same order as Final List; comma-separated, no JSON quotes and no surrounding `[]` (iOS / MDM paste). */
 function toIosManagedAppConfigArray(arr) {
-  if (arr.length === 0) return '[]';
-  return '[' + arr.map(v => String(v)).join(',') + ']';
+  if (arr.length === 0) return '';
+  return arr.map(v => String(v)).join(',');
 }
 
 /* ══════════════════════════════════════════════
@@ -830,6 +902,10 @@ function run() {
   const jsonNo     = toJson(results.noScheme, compact);
   const jsonPorts  = toJson(results.portsOnly, compact);
   const jsonSkip   = results.skipped.join('\n');
+  const wildcardText =
+    results.wildcardNotes.length > 0
+      ? WILDCARD_LOG_TSV_HEADER + '\n' + results.wildcardNotes.join('\n')
+      : '— No wildcard or glob normalization in this run. —';
 
   // Populate outputs
   document.getElementById('out-final-list').value     = jsonFinal;
@@ -837,6 +913,7 @@ function run() {
   document.getElementById('out-with-scheme').value    = jsonWith;
   document.getElementById('out-no-scheme').value      = jsonNo;
   document.getElementById('out-ports-only').value     = jsonPorts;
+  document.getElementById('out-wildcard-log').value   = wildcardText;
   document.getElementById('out-skipped-list').value   = jsonSkip;
 
   // Final list summary + description (preset-aware)
@@ -869,6 +946,7 @@ function run() {
   document.getElementById('badge-with-scheme').textContent    = results.withScheme.length;
   document.getElementById('badge-no-scheme').textContent   = results.noScheme.length;
   document.getElementById('badge-ports-only').textContent  = results.portsOnly.length;
+  document.getElementById('badge-wildcard-log').textContent  = results.wildcardNotes.length;
   document.getElementById('badge-skipped').textContent     = results.skipped.length;
 
   // Stats — validCount is independent of which output tabs are enabled
@@ -887,6 +965,7 @@ function run() {
   lastOutputArrays['with-scheme']    = results.withScheme.slice();
   lastOutputArrays['no-scheme']    = results.noScheme.slice();
   lastOutputArrays['ports-only']   = results.portsOnly.slice();
+  lastOutputArrays['wildcard-log'] = results.wildcardNotes.slice();
   lastOutputArrays['skipped-list'] = results.skipped.slice();
 
   setOutputSearchEnabled(true);
@@ -897,6 +976,7 @@ function run() {
   else if (results.withScheme.length > 0) switchTab('with-scheme');
   else if (results.noScheme.length > 0)   switchTab('no-scheme');
   else if (results.portsOnly.length > 0)  switchTab('ports-only');
+  else if (results.wildcardNotes.length > 0) switchTab('wildcard-log');
   else                                    switchTab('skipped-list');
 }
 
@@ -1015,6 +1095,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'with-scheme':    'out-with-scheme',
         'no-scheme':      'out-no-scheme',
         'ports-only':     'out-ports-only',
+        'wildcard-log':   'out-wildcard-log',
         'skipped-list':   'out-skipped-list',
       }[btn.dataset.copy];
       const text = document.getElementById(id).value;
@@ -1031,6 +1112,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'with-scheme':    { id: 'out-with-scheme',    name: 'urls-with-scheme.json',    kind: 'json' },
         'no-scheme':      { id: 'out-no-scheme',      name: 'urls-no-scheme.json',      kind: 'json' },
         'ports-only':     { id: 'out-ports-only',     name: 'urls-ports-only.json',     kind: 'json' },
+        'wildcard-log':   { id: 'out-wildcard-log',   name: 'urls-wildcard-log.txt',    kind: 'text' },
       };
       const cfg = map[btn.dataset.download];
       if (!cfg) return;

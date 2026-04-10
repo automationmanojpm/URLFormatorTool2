@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-04-09
+
+### Changed
+
+- **Wildcard log** tab: entries are **tab-separated columns** (`In`, `Out`, `Rules applied`) with a header row for easier scanning and paste into spreadsheets.
+
+## [1.3.4] - 2026-04-09
+
+### Changed
+
+- **Final (iOS)** output is comma-separated URLs only — no surrounding `[]`. Empty list is an empty line (was `[]`).
+
+## [1.3.3] - 2026-04-09
+
+### Added
+
+- **Wildcard log** output tab: after **Process URLs**, lists accepted entries where `*`, `/*`, `*.`, or related normalization changed the URL (input line, normalized output, short rule summary). Copy and **Download .txt**.
+
+## [1.3.2] - 2026-04-09
+
+### Fixed
+
+- **Trailing `/*` in query strings:** Wildcard stripping (`/*`, `*`) applies only to the **pathname** (before `?`), so values like `state=SFDC_CA_DEV/*` are preserved. The later **Strip wildcard prefixes** path pass also skips the query. Query params whose value is exactly `*` (e.g. `?app_id=*`, `&b=*`) are still normalized as before.
+
+## [1.3.1] - 2026-04-09
+
+### Fixed
+
+- **Glued URL split:** `https://` inside a query value (e.g. OAuth `redirect_uri=https://…`) no longer splits one URL into two. Concatenated URLs without a separator (e.g. `…comhttps://…`) and comma/space-separated lists still split as before.
+
 ## [1.3.0] - 2026-04-09
 
 ### Added

@@ -997,6 +997,11 @@ main {
   color: var(--orange);
 }
 
+.tab-badge-wildcard {
+  background: rgba(167,139,250,.15);
+  color: var(--purple);
+}
+
 /* ── Tab panels ── */
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
@@ -1050,6 +1055,12 @@ main {
 
 .output-textarea:focus { border-color: var(--accent); }
 
+/* Wildcard log: tab-separated columns */
+.output-textarea--tsv {
+  tab-size: 10;
+  -moz-tab-size: 10;
+}
+
 /* ── Utility ── */
 .hidden { display: none !important; }
 
@@ -1095,7 +1106,7 @@ main {
   color: var(--green);
 }
 
-/* Final List — iOS / MDM bracket form */
+/* Final List — iOS / MDM comma-separated form */
 .tab-final-ios {
   color: #5eb8d4;
   font-weight: 600;

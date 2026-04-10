@@ -61,7 +61,22 @@ def parse_input(text: str, hint: str = 'auto') -> list[str]:
     return [l.strip().strip('"\'').strip() for l in text.splitlines() if l.strip()]
 
 def split_glued(value: str) -> list[str]:
-    return [p for p in re.split(r'(?=https?://)', value.strip(), flags=re.IGNORECASE) if p]
+    """Match app.js splitGlued: skip split when `https://` follows `=` (e.g. redirect_uri=…)."""
+    return [p.strip() for p in re.split(r'(?<!=)(?=https?://)', value.strip(), flags=re.IGNORECASE) if p.strip()]
+
+
+def normalize_query_wildcard_only_stars(query: str) -> str:
+    """Match app.js: lone * as entire param value only."""
+    if not query or not query.startswith('?'):
+        return query
+    q = query
+    while re.search(r'&[^&=]+=\*$', q):
+        q = re.sub(r'&[^&=]+=\*$', '', q)
+    m = re.match(r'^\?([^=&]+)=\*$', q)
+    if m:
+        return '?' + m.group(1)
+    return q
+
 
 # ── Cleaning ──────────────────────────────────────────────────────────────────
 
@@ -83,15 +98,20 @@ def clean_entry(raw: str, opts=Opts()) -> dict | None:
     s = re.sub(r'^\*+(?=[a-zA-Z])', '', s).strip()
     # Remove whitespace
     s = re.sub(r'\s+', '', s)
-    # Strip trailing wildcards/slashes
-    had_trailing_wildcard = s.endswith('*')
-    s = re.sub(r'[/*]+$', '', s).strip()
+    # Path-only trailing wildcards; preserve query (e.g. state=…/*); lone * param values below
+    q_mark = s.find('?')
+    base_part = s if q_mark == -1 else s[:q_mark]
+    query_part = '' if q_mark == -1 else s[q_mark:]
+    had_trailing_wildcard = base_part.endswith('*')
+    base_part = re.sub(r'[/*]+$', '', base_part).strip()
+    if query_part:
+        query_part = normalize_query_wildcard_only_stars(query_part)
+    s = base_part + query_part
 
-    # Only clean up orphaned query artefacts when a trailing * was actually removed.
     if had_trailing_wildcard:
-        s = re.sub(r'(?:&[^&=]*=?)$', '', s)   # strip trailing &key= or &key
-        s = re.sub(r'[=&?]+$', '', s).strip()  # strip remaining orphaned = & ?
-        s = s.rstrip('?').strip()               # strip empty query marker
+        s = re.sub(r'(?:&[^&=]*=?)$', '', s)
+        s = re.sub(r'[=&?]+$', '', s).strip()
+        s = s.rstrip('?').strip()
 
     if not s:
         return None
@@ -131,7 +151,13 @@ def clean_entry(raw: str, opts=Opts()) -> dict | None:
     path      = s[slash:] if slash != -1 else ''
 
     if opts.strip_wildcards:
-        path = re.sub(r'(\/?\*)+$', '', path).rstrip('/')
+        pq = path.find('?')
+        if pq == -1:
+            path = re.sub(r'(\/?\*)+$', '', path).rstrip('/')
+        else:
+            path_only, query_only = path[:pq], path[pq:]
+            path_only = re.sub(r'(\/?\*)+$', '', path_only).rstrip('/')
+            path = path_only + query_only
     if opts.strip_paths:
         path = ''
 
@@ -294,8 +320,8 @@ test_parse('iOS / MDM unquoted bracket list',
            'auto',
            ['https://idfc-first-bank-ltd.anypoint.mulesoft.com', 'https://idfcfirstbankdev.service-now.com'])
 
-ios_line = '[' + ','.join(['https://a.com', 'b.com']) + ']'
-if ios_line == '[https://a.com,b.com]':
+ios_line = ','.join(['https://a.com', 'b.com'])
+if ios_line == 'https://a.com,b.com':
     print('  ✓ to_ios_managed_app_config_array shape')
     passed += 1
 else:
@@ -368,6 +394,15 @@ test('Wildcard mid-query (?a=1&b=*) → orphaned &b= stripped',
      'https://company.com/page?a=1&b=*',
      'https://company.com/page?a=1',
      'company.com/page?a=1')
+oauth_state_url = (
+    'https://api.digitallocker.gov.in/public/oauth2/1/authorize?response_type=code&client_id=55A0C201'
+    '&redirect_uri=https://uat.example.com/callback&state=SFDC_CA_DEV/*'
+)
+test('OAuth state=…/* preserved in query (not path strip)',
+     oauth_state_url,
+     oauth_state_url,
+     'api.digitallocker.gov.in/public/oauth2/1/authorize?response_type=code&client_id=55A0C201'
+     '&redirect_uri=https://uat.example.com/callback&state=SFDC_CA_DEV/*')
 test('Spaces in URL', 'https://company .com', 'https://company.com', 'company.com')
 test('Country-code TLD .io', 'app.aquilai.io', 'https://app.aquilai.io', 'app.aquilai.io')
 test('Oracle Cloud real-world URL', 'https://ekjx.login.em2.oraclecloud.com:443/oam/fed',
@@ -402,6 +437,19 @@ if pieces == expected_pieces:
     passed += 1
 else:
     print(f'  ✗ Glued split: expected {expected_pieces} got {pieces}')
+    failed += 1
+
+oauth_redirect = (
+    'https://api.digitallocker.gov.in/public/oauth2/1/authorize?response_type=code&client_id=55A0C201'
+    '&redirect_uri=https://uat.fmreporting.idfcfirstbank.com/IDFCAPPS/DIGILOCKER/DigiResponse.aspx'
+    '&state=SFDC_CA_DEV'
+)
+oauth_pieces = split_glued(oauth_redirect)
+if len(oauth_pieces) == 1 and oauth_pieces[0] == oauth_redirect:
+    print('  ✓ OAuth redirect_uri: single URL (no split on nested https://)')
+    passed += 1
+else:
+    print(f'  ✗ OAuth split: expected 1 piece, got {oauth_pieces!r}')
     failed += 1
 
 # ─── Deduplication ────────────────────────────────────────────────────────────
