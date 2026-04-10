@@ -94,24 +94,26 @@ def clean_entry(raw: str, opts=Opts()) -> dict | None:
     s = raw.strip().rstrip(',')
     # Strip surrounding quotes
     s = s.strip('"\'')
-    # Strip leading glob *
-    s = re.sub(r'^\*+(?=[a-zA-Z])', '', s).strip()
+    if opts.strip_wildcards:
+        s = re.sub(r'^\*+(?=[a-zA-Z])', '', s).strip()
     # Remove whitespace
     s = re.sub(r'\s+', '', s)
-    # Path-only trailing wildcards; preserve query (e.g. state=…/*); lone * param values below
     q_mark = s.find('?')
     base_part = s if q_mark == -1 else s[:q_mark]
     query_part = '' if q_mark == -1 else s[q_mark:]
-    had_trailing_wildcard = base_part.endswith('*')
-    base_part = re.sub(r'[/*]+$', '', base_part).strip()
-    if query_part:
-        query_part = normalize_query_wildcard_only_stars(query_part)
-    s = base_part + query_part
 
-    if had_trailing_wildcard:
-        s = re.sub(r'(?:&[^&=]*=?)$', '', s)
-        s = re.sub(r'[=&?]+$', '', s).strip()
-        s = s.rstrip('?').strip()
+    if opts.strip_wildcards:
+        had_trailing_wildcard = base_part.endswith('*')
+        base_part = re.sub(r'[/*]+$', '', base_part).strip()
+        if query_part:
+            query_part = normalize_query_wildcard_only_stars(query_part)
+        s = base_part + query_part
+        if had_trailing_wildcard:
+            s = re.sub(r'(?:&[^&=]*=?)$', '', s)
+            s = re.sub(r'[=&?]+$', '', s).strip()
+            s = s.rstrip('?').strip()
+    else:
+        s = base_part + query_part
 
     if not s:
         return None
@@ -360,6 +362,35 @@ test('*.company.com/*', '*.company.com/*', 'https://company.com', 'company.com')
 test('https://*.company.com', 'https://*.company.com', 'https://company.com', 'company.com')
 test('https://*.company.com/*', 'https://*.company.com/*', 'https://company.com', 'company.com')
 test('*.sub.company.com', '*.sub.company.com', 'https://sub.company.com', 'sub.company.com')
+
+print('\n═══ CLEANING — Preserve wildcards (strip_wildcards off) ═══\n')
+
+
+class OptsNoWildcardStrip(Opts):
+    strip_wildcards = False
+
+
+test_clean_opts(
+    'strip_wildcards off — keep trailing /*',
+    'https://company.com/*',
+    OptsNoWildcardStrip(),
+    'https://company.com/*',
+    'company.com/*',
+)
+test_clean_opts(
+    'strip_wildcards off — keep *. host and path /*',
+    '*.company.com/*',
+    OptsNoWildcardStrip(),
+    'https://*.company.com/*',
+    '*.company.com/*',
+)
+test_clean_opts(
+    'strip_wildcards off — keep ?app_id=*',
+    'https://consent.digilocker.gov.in/consent-form?app_id=*',
+    OptsNoWildcardStrip(),
+    'https://consent.digilocker.gov.in/consent-form?app_id=*',
+    'consent.digilocker.gov.in/consent-form?app_id=*',
+)
 
 # ─── Broken schemes ───────────────────────────────────────────────────────────
 print('\n═══ CLEANING — Broken schemes ═══\n')

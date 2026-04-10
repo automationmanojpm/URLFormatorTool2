@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.8] - 2026-04-09
+
+### Added
+
+- **Preserve vs normalize globs:** The cleaning toggle is now **Normalize wildcards / globs** (same `opt-strip-wildcards` id). **Off** keeps `*.host`, trailing `/*`, lone `*` query cleanup, and leading `*` before a scheme; **on** (default) normalizes toward plain host/URL as before.
+
+### Changed
+
+- **Wildcard log** **Copy** / **Download** export **CSV** (quoted fields, `.csv` file, `text/csv`) instead of tab-separated `.txt`.
+
 ## [1.3.7] - 2026-04-09
 
 ### Fixed

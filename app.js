@@ -1,7 +1,7 @@
 'use strict';
 
 /** Release version — bump for fixes/features; update CHANGELOG.md and `?v=` on app.js + style.css in index.html. */
-const APP_VERSION = '1.3.7';
+const APP_VERSION = '1.3.8';
 
 /** Full URL lists per output tab — used for output search / filter */
 const lastOutputArrays = {
@@ -140,7 +140,8 @@ function normalizeQueryWildcardOnlyStars(query) {
 
 /**
  * Returns { withScheme, noScheme, hasPort, wildcardLog } or null if invalid.
- * `wildcardLog` is a short human-readable summary when *, /*, or *. glob rules changed the URL.
+ * `wildcardLog` is a short human-readable summary when glob rules changed the URL (only when
+ * **Normalize wildcards / globs** is on — `opts.stripWildcards`).
  */
 function cleanEntry(raw, opts) {
   const wcNotes = [];
@@ -149,8 +150,8 @@ function cleanEntry(raw, opts) {
   // Strip surrounding quotes that may survive CSV/line parsing
   s = s.replace(/^["']+|["']+$/g, '').trim();
 
-  // Strip leading glob * before a scheme letter
-  {
+  // Leading * before scheme, trailing path `/*`, query lone-* cleanup — all tied to "normalize wildcards" (opt-strip-wildcards).
+  if (opts.stripWildcards) {
     const before = s;
     s = s.replace(/^\*+(?=[a-zA-Z])/g, '').trim();
     if (s !== before) wcNotes.push('removed leading * before scheme');
@@ -159,33 +160,32 @@ function cleanEntry(raw, opts) {
   // Remove all whitespace
   s = s.replace(/\s+/g, '');
 
-  // Strip trailing wildcards/slashes from the path only (before `?`), so query values
-  // like `state=SFDC_CA_DEV/*` stay intact. Lone-* placeholder params are handled below.
   const qMark = s.indexOf('?');
   let basePart = qMark === -1 ? s : s.slice(0, qMark);
   let queryPart = qMark === -1 ? '' : s.slice(qMark);
-  const hadTrailingWildcard = /\*$/.test(basePart);
-  {
-    const before = basePart;
-    basePart = basePart.replace(/[/*]+$/, '').trim();
-    if (basePart !== before) wcNotes.push('removed trailing / or * from path (before ?)');
-  }
-  if (queryPart) {
-    const beforeQ = queryPart;
-    queryPart = normalizeQueryWildcardOnlyStars(queryPart);
-    if (queryPart !== beforeQ) wcNotes.push('normalized query param(s) with lone * value');
-  }
-  s = basePart + queryPart;
 
-  // Only clean up orphaned path/query artefacts when a trailing * was removed from the path.
-  // e.g. path …/foo?app_id=* — * removed from path? No; lone * in query handled by normalizeQueryWildcardOnlyStars.
-  // Legacy: path ended with /* → query orphan cleanup on full string.
-  if (hadTrailingWildcard) {
-    const beforeO = s;
-    s = s.replace(/(?:&[^&=]*=?)$/, ''); // strip trailing &key= or &key artefact
-    s = s.replace(/[=&?]+$/, '').trim(); // strip remaining orphaned = & ?
-    s = s.replace(/\?$/, '').trim(); // strip empty query marker
-    if (s !== beforeO) wcNotes.push('cleaned trailing query fragment after path wildcard removal');
+  if (opts.stripWildcards) {
+    const hadTrailingWildcard = /\*$/.test(basePart);
+    {
+      const before = basePart;
+      basePart = basePart.replace(/[/*]+$/, '').trim();
+      if (basePart !== before) wcNotes.push('removed trailing / or * from path (before ?)');
+    }
+    if (queryPart) {
+      const beforeQ = queryPart;
+      queryPart = normalizeQueryWildcardOnlyStars(queryPart);
+      if (queryPart !== beforeQ) wcNotes.push('normalized query param(s) with lone * value');
+    }
+    s = basePart + queryPart;
+    if (hadTrailingWildcard) {
+      const beforeO = s;
+      s = s.replace(/(?:&[^&=]*=?)$/, '');
+      s = s.replace(/[=&?]+$/, '').trim();
+      s = s.replace(/\?$/, '').trim();
+      if (s !== beforeO) wcNotes.push('cleaned trailing query fragment after path wildcard removal');
+    }
+  } else {
+    s = basePart + queryPart;
   }
 
   if (!s) return null;
@@ -210,7 +210,7 @@ function cleanEntry(raw, opts) {
     s = s.replace(/^\/\//, '');
   }
 
-  // Strip wildcard host prefixes: *.domain.com → domain.com
+  // Strip wildcard host prefixes: *.domain.com → domain.com (same toggle as path/query glob rules above)
   if (opts.stripWildcards) {
     const beforeW = s;
     s = s.replace(/^(\*\.)+/g, '');
@@ -289,17 +289,24 @@ function cleanEntry(raw, opts) {
   return { withScheme, noScheme, hasPort, raw, dedupKey, wildcardLog };
 }
 
-/** Tab-separated row for wildcard log; normalizes tabs/newlines inside cells so each entry stays one line. */
-function wildcardLogTsvRow(piece, dedupKey, wildcardLog) {
-  const cell = s =>
-    String(s)
-      .replace(/\t/g, ' ')
-      .replace(/\r\n|\r|\n/g, ' ');
-  return [cell(piece), cell(dedupKey), cell(wildcardLog)].join('\t');
+/** RFC 4180-style CSV field (quote if needed). */
+function csvEscapeField(val) {
+  const t = String(val);
+  if (/[",\r\n]/.test(t)) {
+    return '"' + t.replace(/"/g, '""') + '"';
+  }
+  return t;
 }
 
-/** First line of wildcard log textarea (not included in `lastOutputArrays['wildcard-log']` for filtering). */
-const WILDCARD_LOG_TSV_HEADER = 'In\tOut\tRules applied';
+/** Wildcard log export: header row + one CSV row per entry (for Copy / Download). */
+function wildcardLogExportCsv(rows) {
+  if (!rows || rows.length === 0) return '';
+  const header = ['In', 'Out', 'Rules applied'].map(csvEscapeField).join(',');
+  const lines = rows.map(r =>
+    [r.inputLine, r.outputUrl, r.rules].map(csvEscapeField).join(',')
+  );
+  return header + '\n' + lines.join('\n');
+}
 
 /* ══════════════════════════════════════════════
    PROCESSING — orchestrate everything
@@ -754,15 +761,6 @@ function renderWildcardLogPanel(rows) {
   tbody.innerHTML = renderWildcardTableBodyHtml(rows, '');
 }
 
-function wildcardLogExportTsv(rows) {
-  if (!rows || rows.length === 0) return '';
-  return (
-    WILDCARD_LOG_TSV_HEADER +
-    '\n' +
-    rows.map(r => wildcardLogTsvRow(r.inputLine, r.outputUrl, r.rules)).join('\n')
-  );
-}
-
 function getActiveTabName() {
   const t = document.querySelector('#output-tabs .tab.active');
   return t ? t.dataset.tab : 'final-list';
@@ -931,8 +929,8 @@ function downloadJson(content, filename) {
   URL.revokeObjectURL(url);
 }
 
-function downloadText(content, filename) {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+function downloadText(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType || 'text/plain;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
@@ -1175,7 +1173,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const key = btn.dataset.copy;
       const text =
         key === 'wildcard-log'
-          ? wildcardLogExportTsv(lastOutputArrays['wildcard-log'])
+          ? wildcardLogExportCsv(lastOutputArrays['wildcard-log'])
           : document.getElementById({
               'final-list':     'out-final-list',
               'final-list-ios': 'out-final-list-ios',
@@ -1193,7 +1191,11 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => {
       const key = btn.dataset.download;
       if (key === 'wildcard-log') {
-        downloadText(wildcardLogExportTsv(lastOutputArrays['wildcard-log']), 'urls-wildcard-log.txt');
+        downloadText(
+          wildcardLogExportCsv(lastOutputArrays['wildcard-log']),
+          'urls-wildcard-log.csv',
+          'text/csv;charset=utf-8'
+        );
         return;
       }
       const map = {

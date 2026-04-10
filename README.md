@@ -34,7 +34,7 @@ All processing runs **entirely in your browser**—nothing is uploaded to a serv
 
 ### Cleaning options
 
-- **Strip wildcard prefixes** — e.g. `*.company.com` → `company.com`.
+- **Normalize wildcards / globs** — when **on** (default): strip `*.` on the host, trailing `/*` (and similar) on the path before `?`, normalize query params whose value is only `*`, and remove a stray `*` before `http`/`https`. When **off**, those patterns are kept for glob-style allowlists; other cleaning (schemes, `www.`, dedup, etc.) still runs.
 - **Strip `www.`** — normalize hostnames.
 - **Fix broken schemes** — e.g. `https:/host` → `https://host`.
 - **Add `https://` to bare domains** — when on (default), bare hosts get synthetic `https://` for **With Scheme** and for **Final List** in full-https mode. When off, schemeless **host/path only** (no port) stays bare there; explicit `http(s)://` and bare **`host:port`** still normalize to `https://` where a URL scheme is required. **Deduplication** always uses a canonical `https://` key so `http://` and `https://` still collapse.
@@ -50,9 +50,10 @@ All processing runs **entirely in your browser**—nothing is uploaded to a serv
 - **With Scheme** — `https://…` for each entry that has a synthetic or normalized scheme (bare schemeless hosts are omitted here when **Add `https://`** is off).
 - **No Scheme** — bare host/path; URLs with explicit ports are omitted here (not representable as a single bare host+port string in that list).
 - **Ports Only** — entries that include an explicit `:port`.
+- **Wildcard log** — table of URLs where **Normalize wildcards / globs** changed the input (empty if that option is off or nothing was normalized). **Copy** / **Download** as **CSV**.
 - **Skipped** — invalid, filtered, or duplicate-dropped inputs for review.
 
-Each tab supports **filter**, **Copy**, and (where applicable) **Download .json** Compact vs. pretty JSON is controlled by **Compact JSON**.
+Each tab supports **filter**, **Copy**, and (where applicable) **Download** (`.json`, `.txt`, or `.csv` for the wildcard log). Compact vs. pretty JSON is controlled by **Compact JSON**.
 
 ### Quick presets
 
