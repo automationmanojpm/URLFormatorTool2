@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <title>URL Formatter — URL lists for managed app configuration</title>
-  <link rel="stylesheet" href="style.css?v=1.3.12" />
+  <link rel="stylesheet" href="style.css?v=1.3.14" />
 </head>
 <body>
 
@@ -385,13 +385,27 @@
 
       <div class="tab-panel" id="panel-wildcard-log">
         <div class="output-toolbar">
-          <span class="output-desc">Accepted entries where wildcard or glob normalization ran (e.g. <code>*.</code> host prefix, trailing <code>/*</code> on the path, query <code>*</code> cleanup). <strong>Columns:</strong> <strong>In</strong> (original line), <strong>Out</strong> (normalized), <strong>Rules applied</strong> — tab-separated so rows align and paste into Excel or Sheets.</span>
+          <span class="output-desc">Accepted entries where wildcard or glob normalization ran (e.g. <code>*.</code> host prefix, trailing <code>/*</code> on the path, query <code>*</code> cleanup). Shown as a <strong>table</strong> with borders; long URLs <strong>wrap</strong> inside cells so the layout fits the panel. <strong>Copy</strong> / <strong>Download</strong> use tab-separated text for Excel or Sheets.</span>
           <div class="output-actions">
             <button type="button" class="btn btn-ghost btn-sm" data-copy="wildcard-log">Copy</button>
             <button type="button" class="btn btn-ghost btn-sm" data-download="wildcard-log">Download .txt</button>
           </div>
         </div>
-        <textarea class="output-textarea output-textarea--tsv" id="out-wildcard-log" readonly spellcheck="false"></textarea>
+        <div class="wildcard-log-panel" id="wildcard-log-panel" aria-label="Wildcard normalization log">
+          <p class="wildcard-log-empty hidden" id="wildcard-log-empty">— No wildcard or glob normalization in this run. —</p>
+          <div class="wildcard-log-scroll hidden" id="wildcard-log-scroll" role="region">
+            <table class="wildcard-log-table">
+              <thead>
+                <tr>
+                  <th scope="col" class="wl-col-in">In</th>
+                  <th scope="col" class="wl-col-out">Out</th>
+                  <th scope="col" class="wl-col-rules">Rules applied</th>
+                </tr>
+              </thead>
+              <tbody id="wildcard-log-tbody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
       <div class="tab-panel" id="panel-skipped-list">
@@ -420,6 +434,6 @@
 
   <div class="toast hidden" id="toast">Copied to clipboard!</div>
 
-  <script src="app.js?v=1.3.5"></script>
+  <script src="app.js?v=1.3.7"></script>
 </body>
 </html>

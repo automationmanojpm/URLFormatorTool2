@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.7] - 2026-04-09
+
+### Fixed
+
+- **Wildcard log** table: removed the extra-wide minimum width and nowrap-on-all-cells behavior. The table now uses the panel width (`table-layout: fixed`, column percentages) and **wraps** long URLs inside cells so you rarely need long horizontal scrolling; all three columns stay visible.
+
+## [1.3.6] - 2026-04-09
+
+### Changed
+
+- **Wildcard log** tab: entries render as an **HTML table** with borders, sticky header, zebra rows, and horizontal scrolling so long URLs stay on one line and columns stay aligned. **Copy** / **Download** still export tab-separated text.
+
 ## [1.3.5] - 2026-04-09
 
 ### Changed

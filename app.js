@@ -1,7 +1,7 @@
 'use strict';
 
 /** Release version — bump for fixes/features; update CHANGELOG.md and `?v=` on app.js + style.css in index.html. */
-const APP_VERSION = '1.3.5';
+const APP_VERSION = '1.3.7';
 
 /** Full URL lists per output tab — used for output search / filter */
 const lastOutputArrays = {
@@ -315,7 +315,7 @@ function process(inputText, opts) {
     portsOnly: [],
     finalList: [],      // shape from opts.finalListPreset: full-https → all withScheme; else bare + https for ports
     finalPortCount: 0,  // entries with explicit :port (for legend / summary)
-    /** One tab-separated row per accepted URL where glob/wildcard rules changed the input (In, Out, rules) */
+    /** `{ inputLine, outputUrl, rules }` per accepted URL where glob/wildcard rules changed the input */
     wildcardNotes: [],
     skipped: [],
     totalInput: 0,
@@ -358,7 +358,11 @@ function process(inputText, opts) {
     results.validCount++;
 
     if (wildcardLog) {
-      results.wildcardNotes.push(wildcardLogTsvRow(piece, dedupKey, wildcardLog));
+      results.wildcardNotes.push({
+        inputLine: piece,
+        outputUrl: dedupKey,
+        rules: wildcardLog,
+      });
     }
 
     if (opts.outWithScheme && withScheme) {
@@ -696,6 +700,69 @@ function highlightHtml(text, q) {
   return out;
 }
 
+function wildcardRowMatches(row, qLower) {
+  return (
+    String(row.inputLine).toLowerCase().includes(qLower) ||
+    String(row.outputUrl).toLowerCase().includes(qLower) ||
+    String(row.rules).toLowerCase().includes(qLower)
+  );
+}
+
+function renderWildcardTableBodyHtml(rows, q) {
+  let html = '';
+  for (const r of rows) {
+    const c0 = q ? highlightHtml(r.inputLine, q) : escapeHtml(r.inputLine);
+    const c1 = q ? highlightHtml(r.outputUrl, q) : escapeHtml(r.outputUrl);
+    const c2 = q ? highlightHtml(r.rules, q) : escapeHtml(r.rules);
+    html +=
+      '<tr><td class="wl-col-in">' +
+      c0 +
+      '</td><td class="wl-col-out">' +
+      c1 +
+      '</td><td class="wl-col-rules">' +
+      c2 +
+      '</td></tr>';
+  }
+  return html;
+}
+
+function renderWildcardFilteredTable(rows, q) {
+  return (
+    '<div class="wildcard-log-scroll wildcard-log-scroll--filtered">' +
+    '<table class="wildcard-log-table" role="grid">' +
+    '<thead><tr><th scope="col" class="wl-col-in">In</th><th scope="col" class="wl-col-out">Out</th><th scope="col" class="wl-col-rules">Rules applied</th></tr></thead>' +
+    '<tbody>' +
+    renderWildcardTableBodyHtml(rows, q) +
+    '</tbody></table></div>'
+  );
+}
+
+/** Fills the Wildcard log table or empty state. */
+function renderWildcardLogPanel(rows) {
+  const emptyEl = document.getElementById('wildcard-log-empty');
+  const wrapEl = document.getElementById('wildcard-log-scroll');
+  const tbody = document.getElementById('wildcard-log-tbody');
+  if (!emptyEl || !wrapEl || !tbody) return;
+  tbody.innerHTML = '';
+  if (!rows || rows.length === 0) {
+    emptyEl.classList.remove('hidden');
+    wrapEl.classList.add('hidden');
+    return;
+  }
+  emptyEl.classList.add('hidden');
+  wrapEl.classList.remove('hidden');
+  tbody.innerHTML = renderWildcardTableBodyHtml(rows, '');
+}
+
+function wildcardLogExportTsv(rows) {
+  if (!rows || rows.length === 0) return '';
+  return (
+    WILDCARD_LOG_TSV_HEADER +
+    '\n' +
+    rows.map(r => wildcardLogTsvRow(r.inputLine, r.outputUrl, r.rules)).join('\n')
+  );
+}
+
 function getActiveTabName() {
   const t = document.querySelector('#output-tabs .tab.active');
   return t ? t.dataset.tab : 'final-list';
@@ -744,6 +811,23 @@ function refreshOutputSearch() {
 
   clearBtn.classList.remove('hidden');
   const qLower = q.toLowerCase();
+
+  if (tab === 'wildcard-log') {
+    const filtered = items.filter(r => wildcardRowMatches(r, qLower));
+    countEl.textContent = `${filtered.length} / ${items.length} shown`;
+    countEl.classList.remove('hidden');
+    filteredEl.classList.remove('hidden');
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    if (filtered.length === 0) {
+      filteredEl.innerHTML = '<div class="fv-empty">No matches in this tab.</div>';
+      return;
+    }
+    filteredEl.innerHTML =
+      renderWildcardFilteredTable(filtered, q) +
+      '<div class="fv-footer">Copy / Download use the full list for this tab, not the filter.</div>';
+    return;
+  }
+
   const filtered = items.filter(u => String(u).toLowerCase().includes(qLower));
   countEl.textContent = `${filtered.length} / ${items.length} shown`;
   countEl.classList.remove('hidden');
@@ -902,10 +986,6 @@ function run() {
   const jsonNo     = toJson(results.noScheme, compact);
   const jsonPorts  = toJson(results.portsOnly, compact);
   const jsonSkip   = results.skipped.join('\n');
-  const wildcardText =
-    results.wildcardNotes.length > 0
-      ? WILDCARD_LOG_TSV_HEADER + '\n' + results.wildcardNotes.join('\n')
-      : '— No wildcard or glob normalization in this run. —';
 
   // Populate outputs
   document.getElementById('out-final-list').value     = jsonFinal;
@@ -913,8 +993,9 @@ function run() {
   document.getElementById('out-with-scheme').value    = jsonWith;
   document.getElementById('out-no-scheme').value      = jsonNo;
   document.getElementById('out-ports-only').value     = jsonPorts;
-  document.getElementById('out-wildcard-log').value   = wildcardText;
   document.getElementById('out-skipped-list').value   = jsonSkip;
+
+  renderWildcardLogPanel(results.wildcardNotes);
 
   // Final list summary + description (preset-aware)
   refreshFinalListDescription(opts.finalListPreset, results.finalList.length);
@@ -965,7 +1046,7 @@ function run() {
   lastOutputArrays['with-scheme']    = results.withScheme.slice();
   lastOutputArrays['no-scheme']    = results.noScheme.slice();
   lastOutputArrays['ports-only']   = results.portsOnly.slice();
-  lastOutputArrays['wildcard-log'] = results.wildcardNotes.slice();
+  lastOutputArrays['wildcard-log'] = results.wildcardNotes.map(r => ({ ...r }));
   lastOutputArrays['skipped-list'] = results.skipped.slice();
 
   setOutputSearchEnabled(true);
@@ -1007,6 +1088,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('input-search-count').classList.add('hidden');
     document.getElementById('input-search-clear').classList.add('hidden');
     updateInputSearch();
+    lastOutputArrays['wildcard-log'] = [];
+    renderWildcardLogPanel([]);
   });
 
   // Reset options
@@ -1089,16 +1172,18 @@ document.addEventListener('DOMContentLoaded', () => {
   // Copy buttons
   document.querySelectorAll('[data-copy]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const id = {
-        'final-list':     'out-final-list',
-        'final-list-ios': 'out-final-list-ios',
-        'with-scheme':    'out-with-scheme',
-        'no-scheme':      'out-no-scheme',
-        'ports-only':     'out-ports-only',
-        'wildcard-log':   'out-wildcard-log',
-        'skipped-list':   'out-skipped-list',
-      }[btn.dataset.copy];
-      const text = document.getElementById(id).value;
+      const key = btn.dataset.copy;
+      const text =
+        key === 'wildcard-log'
+          ? wildcardLogExportTsv(lastOutputArrays['wildcard-log'])
+          : document.getElementById({
+              'final-list':     'out-final-list',
+              'final-list-ios': 'out-final-list-ios',
+              'with-scheme':    'out-with-scheme',
+              'no-scheme':      'out-no-scheme',
+              'ports-only':     'out-ports-only',
+              'skipped-list':   'out-skipped-list',
+            }[key]).value;
       navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard!'));
     });
   });
@@ -1106,15 +1191,19 @@ document.addEventListener('DOMContentLoaded', () => {
   // Download buttons
   document.querySelectorAll('[data-download]').forEach(btn => {
     btn.addEventListener('click', () => {
+      const key = btn.dataset.download;
+      if (key === 'wildcard-log') {
+        downloadText(wildcardLogExportTsv(lastOutputArrays['wildcard-log']), 'urls-wildcard-log.txt');
+        return;
+      }
       const map = {
         'final-list':     { id: 'out-final-list',     name: 'urls-final-list.json',     kind: 'json' },
         'final-list-ios': { id: 'out-final-list-ios', name: 'urls-final-list-ios.txt', kind: 'text' },
         'with-scheme':    { id: 'out-with-scheme',    name: 'urls-with-scheme.json',    kind: 'json' },
         'no-scheme':      { id: 'out-no-scheme',      name: 'urls-no-scheme.json',      kind: 'json' },
         'ports-only':     { id: 'out-ports-only',     name: 'urls-ports-only.json',     kind: 'json' },
-        'wildcard-log':   { id: 'out-wildcard-log',   name: 'urls-wildcard-log.txt',    kind: 'text' },
       };
-      const cfg = map[btn.dataset.download];
+      const cfg = map[key];
       if (!cfg) return;
       const content = document.getElementById(cfg.id).value;
       if (cfg.kind === 'text') downloadText(content, cfg.name);

@@ -1055,10 +1055,84 @@ main {
 
 .output-textarea:focus { border-color: var(--accent); }
 
-/* Wildcard log: tab-separated columns */
-.output-textarea--tsv {
-  tab-size: 10;
-  -moz-tab-size: 10;
+/* Wildcard log — real table, borders, horizontal scroll for long URLs */
+.wildcard-log-panel {
+  min-height: 120px;
+  max-width: 100%;
+}
+
+.wildcard-log-empty {
+  font-size: 0.82rem;
+  color: var(--text-sub);
+  padding: 0.75rem 0;
+  margin: 0;
+}
+
+.wildcard-log-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: min(48vh, 480px);
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.wildcard-log-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  max-width: 100%;
+  font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.wildcard-log-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-card);
+  color: var(--text-sub);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  white-space: nowrap;
+}
+
+.wildcard-log-table .wl-col-in {
+  width: 30%;
+}
+
+.wildcard-log-table .wl-col-out {
+  width: 38%;
+}
+
+.wildcard-log-table .wl-col-rules {
+  width: 32%;
+}
+
+.wildcard-log-table tbody td {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.wildcard-log-table tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.filtered-url-view .wildcard-log-scroll {
+  margin-bottom: 0.5rem;
+  max-height: min(40vh, 360px);
 }
 
 /* ── Utility ── */
