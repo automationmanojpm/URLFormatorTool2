@@ -24,6 +24,17 @@ def parse_csv_row(text: str) -> list[str]:
     row = next(reader, [])
     return [v.strip() for v in row if v.strip()]
 
+def parse_unquoted_bracket_url_list(text: str) -> list[str] | None:
+    t = text.strip()
+    if not t.startswith('[') or not t.endswith(']'):
+        return None
+    inner = t[1:-1].strip()
+    if not inner:
+        return []
+    parts = re.split(r',(?=https?://)', inner, flags=re.IGNORECASE)
+    return [p.strip() for p in parts if p.strip()]
+
+
 def parse_input(text: str, hint: str = 'auto') -> list[str]:
     fmt = detect_format(text) if hint == 'auto' else hint
     if fmt == 'json':
@@ -32,7 +43,9 @@ def parse_input(text: str, hint: str = 'auto') -> list[str]:
             if isinstance(parsed, list):
                 return [str(v) for v in parsed]
         except Exception:
-            pass
+            bracket = parse_unquoted_bracket_url_list(text.strip())
+            if bracket is not None:
+                return bracket
     if fmt == 'csv':
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         results = []
@@ -88,9 +101,12 @@ def clean_entry(raw: str, opts=Opts()) -> dict | None:
         s = re.sub(r'^(https?:)/(?!/)', r'\1//', s, flags=re.IGNORECASE)
 
     # Detect scheme
+    had_http_family = False
     scheme_m = re.match(r'^([a-z][a-z0-9+.-]*):', s, re.IGNORECASE)
-    if scheme_m:
+    if scheme_m and '.' not in scheme_m.group(1):
         scheme = scheme_m.group(1).lower()
+        if scheme in ('http', 'https'):
+            had_http_family = True
         if opts.filter_non_http and scheme not in ('http', 'https'):
             return None
         s = s[len(scheme_m.group(0)):]
@@ -142,10 +158,16 @@ def clean_entry(raw: str, opts=Opts()) -> dict | None:
     if not re.search(r'\.[a-z]{2,}(:\d+)?([/?#].*)?$', full, re.IGNORECASE):
         return None
 
+    dedup_key = 'https://' + full
+    no_scheme = None if has_port else full
+    omit_synthetic = not opts.add_scheme and not had_http_family and not has_port
+    with_scheme = None if omit_synthetic else dedup_key
+
     return {
-        'withScheme': 'https://' + full,
-        'noScheme':   None if has_port else full,
+        'withScheme': with_scheme,
+        'noScheme':   no_scheme,
         'hasPort':    has_port,
+        'dedupKey':   dedup_key,
     }
 
 # ── Test harness ──────────────────────────────────────────────────────────────
@@ -267,6 +289,19 @@ test_parse('One per line', 'https://a.com\nhttps://b.com\nhttps://c.com', 'auto'
            ['https://a.com', 'https://b.com', 'https://c.com'])
 test_parse('JSON array', '["https://a.com","https://b.com"]', 'auto',
            ['https://a.com', 'https://b.com'])
+test_parse('iOS / MDM unquoted bracket list',
+           '[https://idfc-first-bank-ltd.anypoint.mulesoft.com,https://idfcfirstbankdev.service-now.com]',
+           'auto',
+           ['https://idfc-first-bank-ltd.anypoint.mulesoft.com', 'https://idfcfirstbankdev.service-now.com'])
+
+ios_line = '[' + ','.join(['https://a.com', 'b.com']) + ']'
+if ios_line == '[https://a.com,b.com]':
+    print('  ✓ to_ios_managed_app_config_array shape')
+    passed += 1
+else:
+    print(f'  ✗ to_ios_managed_app_config_array shape got {ios_line!r}')
+    failed += 1
+
 test_parse('Single-line quoted CSV', '"https://a.com","https://b.com","https://c.com"', 'auto',
            ['https://a.com', 'https://b.com', 'https://c.com'])
 test_parse('Single-line unquoted CSV', 'https://a.com,https://b.com,https://c.com', 'auto',
@@ -311,6 +346,7 @@ test('Quoted bare domain', '"company.com"', 'https://company.com', 'company.com'
 print('\n═══ CLEANING — Port numbers ═══\n')
 
 test('Port 8080', 'https://internal.company.com:8080', 'https://internal.company.com:8080', None)
+test('Bare host:port (no scheme)', 'internal.com:8080', 'https://internal.com:8080', None)
 test('Port + path', 'https://service.company.com:8453/api/v1', 'https://service.company.com:8453/api/v1', None)
 test('Port 443 + path', 'https://login.provider.com:443/oam/fed', 'https://login.provider.com:443/oam/fed', None)
 test('Port 444', 'https://account.azure.com:444', 'https://account.azure.com:444', None)
@@ -338,6 +374,23 @@ test('Oracle Cloud real-world URL', 'https://ekjx.login.em2.oraclecloud.com:443/
      'https://ekjx.login.em2.oraclecloud.com:443/oam/fed', None)
 test('Leading dot bare domain', '.company.com', 'https://company.com', 'company.com')
 
+# ─── add_scheme (mirror app.js addScheme) ────────────────────────────────────
+print('\n═══ ADD HTTPS TO BARE DOMAINS (add_scheme) ═══\n')
+
+
+class OptsNoAdd(Opts):
+    add_scheme = False
+
+
+test_clean_opts('add_scheme off — bare domain omits synthetic withScheme',
+                'company.com', OptsNoAdd(), None, 'company.com')
+test_clean_opts('add_scheme off — explicit https kept',
+                'https://company.com', OptsNoAdd(), 'https://company.com', 'company.com')
+test_clean_opts('add_scheme off — bare host:port still gets https in withScheme',
+                'internal.com:8080', OptsNoAdd(), 'https://internal.com:8080', None)
+test_clean_opts('add_scheme on — bare domain (default)',
+                'company.com', Opts(), 'https://company.com', 'company.com')
+
 # ─── Glued URLs ───────────────────────────────────────────────────────────────
 print('\n═══ GLUED URL SPLITTING ═══\n')
 
@@ -363,10 +416,10 @@ for e in entries:
     c = clean_entry(e)
     if not c:
         continue
-    if c['withScheme'] in seen:
+    if c['dedupKey'] in seen:
         dupe_count += 1
         continue
-    seen.add(c['withScheme'])
+    seen.add(c['dedupKey'])
     valid_count += 1
 
 if valid_count == 2 and dupe_count == 2:

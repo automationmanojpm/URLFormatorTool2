@@ -186,7 +186,11 @@ main {
 @media (max-width: 720px) {
   .options-grid { grid-template-columns: 1fr; }
   .option-group { border-right: none !important; border-bottom: 1px solid var(--border); padding: 1rem 0 !important; }
-  .option-group:last-child { border-bottom: none; padding-bottom: 0 !important; }
+  .output-presets-row {
+    border-top: none;
+    padding-top: 1rem;
+    margin-top: 0;
+  }
 }
 
 .option-group {
@@ -198,12 +202,14 @@ main {
 }
 
 .option-group:first-child { padding-left: 0; }
-/* Output column: full width when stacked; container drives preset grid */
-.option-group:last-child {
+
+.option-group--outputs {
   padding-right: 0;
   border-right: none;
-  container-type: inline-size;
-  container-name: options-output;
+}
+
+.option-group-title--finetune {
+  margin-top: 0.35rem;
 }
 
 .option-group-title {
@@ -219,17 +225,56 @@ main {
 
 /* Output quick presets */
 .output-presets {
-  margin-bottom: 0.75rem;
-  padding-bottom: 0.75rem;
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.55rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.preset-header-row {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.35rem;
-  margin-bottom: 0.65rem;
+.output-presets-row {
+  grid-column: 1 / -1;
+  margin-top: 0.35rem;
+  margin-bottom: 0;
+  padding-top: 1rem;
+  padding-bottom: 0;
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+}
+
+.output-presets-row .preset-picker {
+  margin-bottom: 0.45rem;
+}
+
+.output-presets > .preset-label {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.preset-quick-note {
+  font-size: 0.78rem;
+  color: var(--text-sub);
+  line-height: 1.45;
+  margin: 0 0 0.55rem;
+}
+
+.preset-quick-note p {
+  margin: 0;
+}
+
+.preset-quick-note p + p {
+  margin-top: 0.45rem;
+}
+
+.preset-quick-note strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.preset-quick-note code {
+  font-size: 0.88em;
+  padding: 0.08em 0.28em;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--accent-hover);
 }
 
 .preset-label {
@@ -238,18 +283,6 @@ main {
   text-transform: uppercase;
   letter-spacing: .06em;
   color: var(--text-dim);
-}
-
-.preset-header-hint {
-  font-size: 0.74rem;
-  color: var(--text-sub);
-  line-height: 1.5;
-  margin: 0;
-}
-
-.preset-header-hint strong {
-  color: var(--text);
-  font-weight: 600;
 }
 
 .preset-i-chip {
@@ -271,19 +304,12 @@ main {
   height: 11px;
 }
 
-/* Default: one column so narrow Output column stays readable */
+/* Presets always in one horizontal row (wrap only on very narrow viewports) */
 .preset-picker {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
   margin-bottom: 0.55rem;
-}
-
-@container options-output (min-width: 520px) {
-  .preset-picker {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.45rem;
-  }
 }
 
 .preset-card {
@@ -291,8 +317,12 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, transparent 48%);
-  overflow: hidden;
+  overflow: visible;
   transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.preset-card:has(.preset-info-wrap:is(:hover, :focus-within, .preset-info-wrap--open)) {
+  z-index: 12;
 }
 
 .preset-card:hover:not(.preset-card-active) {
@@ -300,17 +330,61 @@ main {
 }
 
 .preset-card-active {
-  border-color: rgba(79, 126, 255, 0.55);
+  border-color: rgba(79, 126, 255, 0.78);
   box-shadow:
-    inset 3px 0 0 var(--accent),
-    0 2px 16px rgba(79, 126, 255, 0.12);
+    inset 4px 0 0 var(--accent),
+    0 0 0 1px rgba(79, 126, 255, 0.28),
+    0 4px 22px rgba(79, 126, 255, 0.2);
+}
+
+/* Edge URL list — recommended preset */
+.preset-card-recommended:not(.preset-card-active) {
+  border-color: rgba(52, 199, 123, 0.22);
+}
+
+.preset-btn-title-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.preset-btn-title-row .preset-btn-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.preset-recommended-badge {
+  flex-shrink: 0;
+  padding: 0.2em 0.42em;
+  border-radius: 4px;
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  color: #0c1210;
+  background: linear-gradient(180deg, #3dd68f 0%, var(--green) 100%);
+  box-shadow:
+    0 0 0 1px rgba(52, 199, 123, 0.45),
+    0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.preset-card-active .preset-recommended-badge {
+  box-shadow:
+    0 0 0 1px rgba(52, 199, 123, 0.55),
+    0 0 12px rgba(52, 199, 123, 0.25);
 }
 
 .preset-card-top {
   display: flex;
   align-items: stretch;
   position: relative;
-  min-height: 3.15rem;
+  min-height: 2.85rem;
 }
 
 .preset-btn {
@@ -320,10 +394,10 @@ main {
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: 0.2rem;
+  gap: 0.12rem;
   font-family: var(--font);
   text-align: left;
-  padding: 0.55rem 0.65rem;
+  padding: 0.45rem 0.55rem;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -350,32 +424,40 @@ main {
 
 .preset-card-active .preset-btn.active {
   color: var(--accent);
+  background: rgba(79, 126, 255, 0.14);
 }
 
 .preset-btn-title {
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: -0.02em;
-  line-height: 1.3;
+  line-height: 1.28;
 }
 
 .preset-btn-tag {
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   font-weight: 500;
   color: var(--text-dim);
-  line-height: 1.25;
+  line-height: 1.22;
 }
 
 .preset-btn.active .preset-btn-tag {
   color: var(--text-sub);
 }
 
+.preset-info-wrap {
+  position: relative;
+  flex-shrink: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  margin-right: 0.5rem;
+}
+
 .preset-info-btn {
   flex-shrink: 0;
-  align-self: center;
   width: 2rem;
   height: 2rem;
-  margin: 0 0.5rem 0 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -384,7 +466,7 @@ main {
   background: rgba(0, 0, 0, 0.2);
   color: var(--text-dim);
   cursor: pointer;
-  transition: color .15s, background .15s, border-color .15s, transform .12s ease;
+  transition: color .15s, background .15s, border-color .15s;
 }
 
 .preset-info-btn:hover,
@@ -399,20 +481,22 @@ main {
   box-shadow: 0 0 0 2px rgba(79, 126, 255, 0.35);
 }
 
-.preset-info-btn[aria-expanded="true"] {
+.preset-info-wrap:is(:hover, :focus-within) .preset-info-btn {
+  color: var(--accent);
+  background: rgba(79, 126, 255, 0.12);
+  border-color: rgba(79, 126, 255, 0.35);
+}
+
+.preset-info-wrap.preset-info-wrap--open .preset-info-btn {
   color: var(--accent);
   background: rgba(79, 126, 255, 0.18);
   border-color: var(--accent);
-  transform: scale(1.05);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .preset-info-btn,
   .preset-card {
     transition: none;
-  }
-  .preset-info-btn[aria-expanded="true"] {
-    transform: none;
   }
 }
 
@@ -421,29 +505,54 @@ main {
   height: 14px;
 }
 
-.preset-detail-panel {
+/* Hover / focus / touch “pinned” notes — not inline in the card */
+.preset-detail-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 40;
+  min-width: min(17.5rem, calc(100vw - 2rem));
+  max-width: min(22rem, calc(100vw - 2rem));
   padding: 0.65rem 0.75rem 0.75rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(79, 126, 255, 0.35);
   font-size: 0.74rem;
   color: var(--text-sub);
   line-height: 1.55;
-  background: rgba(0, 0, 0, 0.22);
+  background: var(--bg-card);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 12px 40px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.16s ease, visibility 0.16s ease, transform 0.16s ease;
 }
 
-.preset-detail-panel p {
+.preset-info-wrap:hover .preset-detail-popover,
+.preset-info-wrap:focus-within .preset-detail-popover,
+.preset-info-wrap.preset-info-wrap--open .preset-detail-popover {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.preset-detail-popover p {
   margin: 0;
 }
 
-.preset-detail-panel p + p {
+.preset-detail-popover p + p {
   margin-top: 0.5rem;
 }
 
-.preset-detail-panel strong {
+.preset-detail-popover strong {
   color: var(--text);
   font-weight: 600;
 }
 
-.preset-detail-panel code {
+.preset-detail-popover code {
   background: rgba(79, 126, 255, 0.12);
   color: var(--accent);
   border-radius: 3px;
@@ -451,12 +560,19 @@ main {
   font-size: 0.68rem;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .preset-detail-popover {
+    transition: none;
+    transform: none;
+  }
+}
+
 .preset-hint {
-  font-size: 0.73rem;
+  font-size: 0.71rem;
   color: var(--text-sub);
-  line-height: 1.5;
+  line-height: 1.45;
   margin: 0;
-  padding: 0.55rem 0.65rem;
+  padding: 0.45rem 0.55rem;
   border-radius: var(--radius-sm);
   border: 1px solid rgba(79, 126, 255, 0.14);
   background: rgba(79, 126, 255, 0.06);
@@ -477,6 +593,7 @@ main {
 
 /* ── Toggle rows ── */
 .toggle-row {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -512,7 +629,20 @@ main {
 }
 
 /* ── Toggle switch ── */
-.toggle-row input[type="checkbox"] { display: none; }
+/* Visually hidden but in the tree so :checked + programmatic updates repaint reliably (display:none can desync custom switches). */
+.toggle-row input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 
 .toggle-switch {
   flex-shrink: 0;
@@ -965,6 +1095,26 @@ main {
   color: var(--green);
 }
 
+/* Final List — iOS / MDM bracket form */
+.tab-final-ios {
+  color: #5eb8d4;
+  font-weight: 600;
+}
+
+.tab-final-ios.active {
+  color: #6ecfe8;
+  border-bottom-color: #5eb8d4;
+}
+
+.tab-final-ios:hover {
+  color: #8edcf0;
+}
+
+.tab-badge-final-ios {
+  background: rgba(94, 184, 212, 0.18);
+  color: #6ecfe8;
+}
+
 .final-legend {
   display: inline-flex;
   align-items: center;
@@ -1026,4 +1176,14 @@ footer {
 
 .footer-icon {
   font-size: 1rem;
+}
+
+.footer-sep {
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.footer-version {
+  color: var(--text-sub);
+  font-variant-numeric: tabular-nums;
 }

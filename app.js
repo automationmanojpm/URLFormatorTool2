@@ -1,8 +1,12 @@
 'use strict';
 
+/** Release version — bump for fixes/features; update CHANGELOG.md and `?v=` on app.js + style.css in index.html. */
+const APP_VERSION = '1.3.0';
+
 /** Full URL lists per output tab — used for output search / filter */
 const lastOutputArrays = {
   'final-list': [],
+  'final-list-ios': [],
   'with-scheme': [],
   'no-scheme': [],
   'ports-only': [],
@@ -38,7 +42,8 @@ function parseInput(text, formatHint) {
       const parsed = JSON.parse(text.trim());
       if (Array.isArray(parsed)) return parsed.map(String);
     } catch {
-      // fall through to line-by-line
+      const bracket = parseUnquotedBracketUrlList(text.trim());
+      if (bracket !== null) return bracket;
     }
   }
 
@@ -62,6 +67,18 @@ function parseInput(text, formatHint) {
   return text.split('\n')
     .map(l => l.trim().replace(/^["']+|["']+$/g, '').trim())
     .filter(Boolean);
+}
+
+/**
+ * iOS / MDM-style paste: [https://a.com,https://b.com] (no JSON quotes).
+ * Splits on commas only when followed by http(s):// to reduce breaks inside query strings.
+ */
+function parseUnquotedBracketUrlList(text) {
+  const t = text.trim();
+  if (!t.startsWith('[') || !t.endsWith(']')) return null;
+  const inner = t.slice(1, -1).trim();
+  if (!inner) return [];
+  return inner.split(/,(?=https?:\/\/)/i).map(s => s.trim()).filter(Boolean);
 }
 
 function parseCsvRow(text) {
@@ -137,17 +154,18 @@ function cleanEntry(raw, opts) {
     s = s.replace(/^(https?:)\/(?!\/)/i, '$1//');
   }
 
-  // Detect scheme
+  // Detect scheme (track http/https so "Add https://" can be skipped for bare domains only)
+  let hadHttpFamily = false;
   const schemeM = s.match(/^([a-z][a-z0-9+.-]*):/i);
-  if (schemeM) {
+  // If the "scheme" contains a dot, the first : is almost certainly host:port (e.g. internal.com:8080), not a scheme.
+  if (schemeM && !schemeM[1].includes('.')) {
     const scheme = schemeM[1].toLowerCase();
+    if (['http', 'https'].includes(scheme)) hadHttpFamily = true;
     if (opts.filterNonHttp && !['http', 'https'].includes(scheme)) {
       return null; // non-HTTP scheme (app IDs, tel:, etc.)
     }
-    // Strip scheme for uniform processing
     s = s.slice(schemeM[0].length).replace(/^\/\//, '');
   } else {
-    // No scheme — check if looks like bare domain
     s = s.replace(/^\/\//, '');
   }
 
@@ -208,11 +226,13 @@ function cleanEntry(raw, opts) {
   // Check if there is actually a valid TLD (must end in 2+ letter TLD)
   if (!/\.[a-z]{2,}(:\d+)?([/?#].*)?$/i.test(full)) return null;
 
-  const withScheme = 'https://' + full;
-  const noScheme   = hasPort ? null : full; // port entries excluded from no-scheme
+  const dedupKey = 'https://' + full;
+  const noScheme = hasPort ? null : full; // port entries excluded from no-scheme
+  // Without addScheme, do not synthesize https:// for bare host/path (no port); ports still need https in lists
+  const omitSyntheticHttps = !opts.addScheme && !hadHttpFamily && !hasPort;
+  const withScheme = omitSyntheticHttps ? null : dedupKey;
 
-  // If user disabled addScheme but wants no-scheme list: noScheme stays as-is
-  return { withScheme, noScheme, hasPort, raw };
+  return { withScheme, noScheme, hasPort, raw, dedupKey };
 }
 
 /* ══════════════════════════════════════════════
@@ -259,23 +279,20 @@ function process(inputText, opts) {
       continue;
     }
 
-    const { withScheme, noScheme, hasPort } = cleaned;
+    const { withScheme, noScheme, hasPort, dedupKey } = cleaned;
 
-    // Deduplication is tracked against the canonical withScheme key
-    const isDup = opts.dedup && seenWith.has(withScheme);
+    const isDup = opts.dedup && seenWith.has(dedupKey);
     if (isDup) {
       results.dupesRemoved++;
       continue; // skip dup across all output lists
     }
-    seenWith.add(withScheme);
+    seenWith.add(dedupKey);
     results.validCount++;
 
-    // With-scheme list
-    if (opts.outWithScheme) {
+    if (opts.outWithScheme && withScheme) {
       results.withScheme.push(withScheme);
     }
 
-    // No-scheme list (port-based URLs excluded — no-scheme with port is invalid)
     if (opts.outNoScheme && noScheme) {
       if (!seenNo.has(noScheme)) {
         seenNo.add(noScheme);
@@ -283,20 +300,21 @@ function process(inputText, opts) {
       }
     }
 
-    // Ports-only list
     if (opts.outPorts && hasPort) {
-      results.portsOnly.push(withScheme);
+      results.portsOnly.push(dedupKey);
     }
 
-    // Final list — shape follows quick preset (see getFinalListPresetId)
     const flp = opts.finalListPreset || 'edge';
     if (flp === 'full-https') {
-      results.finalList.push(withScheme);
-      if (hasPort) results.finalPortCount++;
-    } else {
-      // edge & domains: bare host/path + https:// only when a port is present (Edge-friendly)
-      if (hasPort) {
+      if (withScheme) {
         results.finalList.push(withScheme);
+        if (hasPort) results.finalPortCount++;
+      } else if (noScheme) {
+        results.finalList.push(noScheme);
+      }
+    } else {
+      if (hasPort) {
+        results.finalList.push(dedupKey);
         results.finalPortCount++;
       } else if (noScheme) {
         results.finalList.push(noScheme);
@@ -317,6 +335,12 @@ function toJson(arr, compact) {
     return '[' + arr.map(v => JSON.stringify(v)).join(',') + ']';
   }
   return JSON.stringify(arr, null, 2);
+}
+
+/** Same order as Final List; unquoted bracket string for some managed app config string-array fields. */
+function toIosManagedAppConfigArray(arr) {
+  if (arr.length === 0) return '[]';
+  return '[' + arr.map(v => String(v)).join(',') + ']';
 }
 
 /* ══════════════════════════════════════════════
@@ -361,56 +385,70 @@ function getOpts() {
 
 const PRESET_HINTS = {
   edge:
-    'Strip <code>www.</code> · all output tabs on · <strong>Final List</strong> = bare + <code>https://</code> for ports (Edge).',
+    'Full <strong>Reset to defaults</strong> cleaning/filtering · strip <code>www.</code> · all output tabs on · <strong>Final List</strong> = bare + <code>https://</code> for ports (Edge).',
   'full-https':
-    'Keeps <code>www.</code> · <strong>Final List</strong> = every URL as <code>https://…</code> (same rows as With Scheme).',
+    'Same cleaning defaults as Edge · keep <code>www.</code> · all output tabs on · <strong>Final List</strong> = every line <code>https://…</code>.',
   domains:
-    'Bare in <strong>No Scheme</strong> · With Scheme / Ports off · <strong>Final List</strong> = same shape as Edge (bare + <code>https://</code> for ports).',
+    'Same cleaning defaults as Edge · strip <code>www.</code> · <strong>No Scheme</strong> only among outputs · <strong>Final List</strong> = Edge-style ports rule.',
 };
 
 /** Rich copy for the (i) panels — keep in sync with processing behavior. */
 const PRESET_DETAILS = {
   edge: `
     <p><strong>When to use:</strong> Microsoft Edge <strong>URL List</strong> and similar policies where you want one combined list.</p>
-    <p><strong>What it sets:</strong> Strip <code>www.</code> · <strong>With Scheme</strong>, <strong>No Scheme</strong>, and <strong>Ports Only</strong> tabs all on.</p>
+    <p><strong>What it sets:</strong> <strong>All</strong> processing options match <strong>Reset to defaults</strong> — cleaning, filtering, compact JSON, plus strip <code>www.</code> and <strong>With Scheme</strong>, <strong>No Scheme</strong>, and <strong>Ports Only</strong> all on.</p>
     <p><strong>Final List:</strong> Bare host/path when there is no port; <code>https://</code> is added only for URLs with an explicit port so Edge can parse them.</p>
   `,
   'full-https': `
     <p><strong>When to use:</strong> You need every <strong>Final List</strong> line to be a full URL with <code>https://</code>, while keeping <code>www.</code> when it appears in the input.</p>
-    <p><strong>What it sets:</strong> <strong>Strip www</strong> unchecked (www preserved) · <strong>With Scheme</strong>, <strong>No Scheme</strong>, and <strong>Ports Only</strong> all on.</p>
+    <p><strong>What it sets:</strong> Same cleaning/filtering/compact as Edge preset, but <strong>Strip www</strong> off · all three output lists on.</p>
     <p><strong>Final List:</strong> Same rows as <strong>With Scheme</strong> — every entry is <code>https://…</code>, including hosts without an explicit port.</p>
   `,
   domains: `
     <p><strong>When to use:</strong> Workflows that only need the bare <strong>No Scheme</strong> column (e.g. domain allowlists, some validators).</p>
-    <p><strong>What it sets:</strong> Strip <code>www.</code> · <strong>No Scheme</strong> on · <strong>With Scheme</strong> and <strong>Ports Only</strong> off.</p>
+    <p><strong>What it sets:</strong> Same cleaning/filtering/compact as Edge preset · <strong>No Scheme</strong> on · <strong>With Scheme</strong> and <strong>Ports Only</strong> off.</p>
     <p><strong>Final List:</strong> Same Edge-style rule as the first preset: bare when possible, <code>https://</code> only when a port is present (so port URLs stay valid).</p>
   `,
 };
 
 function initPresetDetailPanels() {
-  document.querySelectorAll('.preset-detail-panel').forEach(panel => {
-    const id = panel.id.replace(/^preset-detail-/, '');
+  document.querySelectorAll('.preset-detail-popover').forEach(pop => {
+    const id = pop.id.replace(/^preset-tooltip-/, '');
     const html = PRESET_DETAILS[id];
-    if (html) panel.innerHTML = html.trim();
+    if (html) pop.innerHTML = html.trim();
   });
 }
 
-function closeAllPresetDetails() {
-  document.querySelectorAll('.preset-detail-panel').forEach(p => p.classList.add('hidden'));
-  document.querySelectorAll('.preset-info-btn').forEach(b => b.setAttribute('aria-expanded', 'false'));
+/** Touch / coarse pointers: popovers are toggled open until dismissed. */
+function closeAllPresetPopoverPins() {
+  document.querySelectorAll('.preset-info-wrap--open').forEach(w => {
+    w.classList.remove('preset-info-wrap--open');
+    const btn = w.querySelector('.preset-info-btn');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  });
 }
 
-function togglePresetDetail(btn) {
-  const presetId = btn.dataset.presetInfo;
-  if (!presetId) return;
-  const panel = document.getElementById(`preset-detail-${presetId}`);
-  if (!panel) return;
-  const wasHidden = panel.classList.contains('hidden');
-  closeAllPresetDetails();
-  if (wasHidden) {
-    panel.classList.remove('hidden');
-    btn.setAttribute('aria-expanded', 'true');
-  }
+function initPresetPopoverTouch() {
+  if (!window.matchMedia('(hover: none)').matches) return;
+
+  document.querySelectorAll('.preset-info-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      const wrap = btn.closest('.preset-info-wrap');
+      if (!wrap) return;
+      const wasOpen = wrap.classList.contains('preset-info-wrap--open');
+      closeAllPresetPopoverPins();
+      if (!wasOpen) {
+        wrap.classList.add('preset-info-wrap--open');
+        btn.setAttribute('aria-expanded', 'true');
+      }
+    });
+  });
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.preset-info-wrap')) closeAllPresetPopoverPins();
+  });
 }
 
 function setPresetHint(presetId) {
@@ -429,89 +467,119 @@ function setPresetButtonsActive(presetId) {
 }
 
 /**
- * True while preset (or reset) is updating checkboxes programmatically.
- * Browsers may fire `change` on those updates; we must not clear the active preset chip.
+ * True while a preset (or programmatic reset) is updating checkboxes.
+ * Suppresses clearing the active preset highlight on synthetic change events.
  */
-let _applyingOutputPreset = false;
+let _applyingPreset = false;
 
-/** Applies output-related toggles + Strip www. Does not change other cleaning options. */
+/** Every processing-options checkbox (cleaning, filtering, outputs, compact). */
+const ALL_OPTION_CHECKBOX_IDS = [
+  'opt-strip-wildcards',
+  'opt-strip-www',
+  'opt-fix-schemes',
+  'opt-add-scheme',
+  'opt-dedup',
+  'opt-filter-non-http',
+  'opt-drop-incomplete-query',
+  'opt-strip-paths',
+  'opt-out-with-scheme',
+  'opt-out-no-scheme',
+  'opt-out-ports',
+  'opt-compact',
+];
+
+/** Cleaning + filtering + compact shared by all quick presets (same as Reset to defaults). */
+const PRESET_SHARED_CLEANING = {
+  'opt-strip-wildcards': true,
+  'opt-fix-schemes': true,
+  'opt-add-scheme': true,
+  'opt-dedup': true,
+  'opt-filter-non-http': true,
+  'opt-drop-incomplete-query': true,
+  'opt-strip-paths': false,
+  'opt-compact': true,
+};
+
+/**
+ * Set checkbox from script. Dispatches input/change so custom switch CSS stays in sync.
+ */
+function setOptionCheckbox(inputId, checked) {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  el.checked = checked;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+/** Applies full preset: shared cleaning/filtering/compact, then strip-www + output lists. */
 function applyOutputPreset(presetId) {
   const id =
     presetId === 'full-https' || presetId === 'domains' ? presetId : 'edge';
 
-  closeAllPresetDetails();
+  closeAllPresetPopoverPins();
 
-  _applyingOutputPreset = true;
+  _applyingPreset = true;
   try {
+    for (const [inputId, checked] of Object.entries(PRESET_SHARED_CLEANING)) {
+      setOptionCheckbox(inputId, checked);
+    }
     if (id === 'full-https') {
-      document.getElementById('opt-strip-www').checked = false;
-      document.getElementById('opt-out-with-scheme').checked = true;
-      document.getElementById('opt-out-no-scheme').checked   = true;
-      document.getElementById('opt-out-ports').checked       = true;
+      setOptionCheckbox('opt-strip-www', false);
+      setOptionCheckbox('opt-out-with-scheme', true);
+      setOptionCheckbox('opt-out-no-scheme', true);
+      setOptionCheckbox('opt-out-ports', true);
     } else if (id === 'domains') {
-      document.getElementById('opt-strip-www').checked = true;
-      document.getElementById('opt-out-with-scheme').checked = false;
-      document.getElementById('opt-out-no-scheme').checked   = true;
-      document.getElementById('opt-out-ports').checked       = false;
+      setOptionCheckbox('opt-strip-www', true);
+      setOptionCheckbox('opt-out-with-scheme', false);
+      setOptionCheckbox('opt-out-no-scheme', true);
+      setOptionCheckbox('opt-out-ports', false);
     } else {
-      document.getElementById('opt-strip-www').checked = true;
-      document.getElementById('opt-out-with-scheme').checked = true;
-      document.getElementById('opt-out-no-scheme').checked   = true;
-      document.getElementById('opt-out-ports').checked       = true;
+      setOptionCheckbox('opt-strip-www', true);
+      setOptionCheckbox('opt-out-with-scheme', true);
+      setOptionCheckbox('opt-out-no-scheme', true);
+      setOptionCheckbox('opt-out-ports', true);
     }
     setPresetButtonsActive(id);
     setPresetHint(id);
   } finally {
-    _applyingOutputPreset = false;
+    _applyingPreset = false;
   }
 }
 
 function clearPresetSelection() {
-  if (_applyingOutputPreset) return;
+  if (_applyingPreset) return;
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('preset-card-active'));
 }
 
-/** If current toggles match a known preset, highlight it; otherwise no chip is active. */
-function syncPresetFromDom() {
-  if (_applyingOutputPreset) return;
-  const www   = document.getElementById('opt-strip-www').checked;
-  const ows   = document.getElementById('opt-out-with-scheme').checked;
-  const ons   = document.getElementById('opt-out-no-scheme').checked;
-  const ports = document.getElementById('opt-out-ports').checked;
+const PRESET_CUSTOM_HINT =
+  'Custom mix — toggles were changed manually; no preset is selected. Pick a quick preset below to apply that layout and highlight it.';
 
-  let id = null;
-  if (www && ows && ons && ports) id = 'edge';
-  else if (!www && ows && ons && ports) id = 'full-https';
-  else if (www && !ows && ons && !ports) id = 'domains';
-
-  if (id) {
+/** Sync card + hint from the button that has .active in HTML (first load). */
+function initPresetSelectionState() {
+  const active = document.querySelector('.preset-btn.active');
+  if (active && ['edge', 'full-https', 'domains'].includes(active.dataset.preset)) {
+    const id = active.dataset.preset;
     setPresetButtonsActive(id);
     setPresetHint(id);
   } else {
     clearPresetSelection();
     const el = document.getElementById('preset-hint');
-    if (el) {
-      el.innerHTML =
-        'Custom mix — adjust toggles below, or pick a quick preset to reset output style.';
-    }
+    if (el) el.innerHTML = PRESET_CUSTOM_HINT;
   }
 }
 
+/**
+ * Any manual change to an option clears the preset highlight until a preset is chosen again.
+ */
+function onAnyOptionCheckboxChange() {
+  if (_applyingPreset) return;
+  clearPresetSelection();
+  const el = document.getElementById('preset-hint');
+  if (el) el.innerHTML = PRESET_CUSTOM_HINT;
+}
+
 function setDefaultOpts() {
-  _applyingOutputPreset = true;
-  try {
-    document.getElementById('opt-strip-wildcards').checked       = true;
-    document.getElementById('opt-fix-schemes').checked           = true;
-    document.getElementById('opt-add-scheme').checked            = true;
-    document.getElementById('opt-dedup').checked                 = true;
-    document.getElementById('opt-filter-non-http').checked       = true;
-    document.getElementById('opt-drop-incomplete-query').checked = true;
-    document.getElementById('opt-strip-paths').checked           = false;
-    document.getElementById('opt-compact').checked               = true;
-  } finally {
-    _applyingOutputPreset = false;
-  }
   applyOutputPreset('edge');
 }
 
@@ -707,6 +775,16 @@ function downloadJson(content, filename) {
   URL.revokeObjectURL(url);
 }
 
+function downloadText(content, filename) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function refreshFinalListDescription(presetId, entryCount) {
   const block = document.getElementById('final-list-descblock');
   if (!block) return;
@@ -747,17 +825,19 @@ function run() {
   const compact = opts.compact;
 
   const jsonFinal  = toJson(results.finalList, compact);
+  const iosFinal   = toIosManagedAppConfigArray(results.finalList);
   const jsonWith   = toJson(results.withScheme, compact);
   const jsonNo     = toJson(results.noScheme, compact);
   const jsonPorts  = toJson(results.portsOnly, compact);
   const jsonSkip   = results.skipped.join('\n');
 
   // Populate outputs
-  document.getElementById('out-final-list').value   = jsonFinal;
-  document.getElementById('out-with-scheme').value  = jsonWith;
-  document.getElementById('out-no-scheme').value    = jsonNo;
-  document.getElementById('out-ports-only').value   = jsonPorts;
-  document.getElementById('out-skipped-list').value = jsonSkip;
+  document.getElementById('out-final-list').value     = jsonFinal;
+  document.getElementById('out-final-list-ios').value = iosFinal;
+  document.getElementById('out-with-scheme').value    = jsonWith;
+  document.getElementById('out-no-scheme').value      = jsonNo;
+  document.getElementById('out-ports-only').value     = jsonPorts;
+  document.getElementById('out-skipped-list').value   = jsonSkip;
 
   // Final list summary + description (preset-aware)
   refreshFinalListDescription(opts.finalListPreset, results.finalList.length);
@@ -784,8 +864,9 @@ function run() {
   document.getElementById('final-summary').innerHTML = summaryInner;
 
   // Badges
-  document.getElementById('badge-final-list').textContent = results.finalList.length;
-  document.getElementById('badge-with-scheme').textContent = results.withScheme.length;
+  document.getElementById('badge-final-list').textContent     = results.finalList.length;
+  document.getElementById('badge-final-list-ios').textContent = results.finalList.length;
+  document.getElementById('badge-with-scheme').textContent    = results.withScheme.length;
   document.getElementById('badge-no-scheme').textContent   = results.noScheme.length;
   document.getElementById('badge-ports-only').textContent  = results.portsOnly.length;
   document.getElementById('badge-skipped').textContent     = results.skipped.length;
@@ -801,8 +882,9 @@ function run() {
   document.getElementById('stats-bar').classList.remove('hidden');
   document.getElementById('output-card').classList.remove('hidden');
 
-  lastOutputArrays['final-list']   = results.finalList.slice();
-  lastOutputArrays['with-scheme']  = results.withScheme.slice();
+  lastOutputArrays['final-list']     = results.finalList.slice();
+  lastOutputArrays['final-list-ios'] = results.finalList.slice();
+  lastOutputArrays['with-scheme']    = results.withScheme.slice();
   lastOutputArrays['no-scheme']    = results.noScheme.slice();
   lastOutputArrays['ports-only']   = results.portsOnly.slice();
   lastOutputArrays['skipped-list'] = results.skipped.slice();
@@ -823,6 +905,8 @@ function run() {
    ══════════════════════════════════════════════ */
 
 document.addEventListener('DOMContentLoaded', () => {
+  const verEl = document.getElementById('app-version');
+  if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
   // Process
   document.getElementById('process-btn').addEventListener('click', run);
@@ -849,29 +933,18 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('reset-options-btn').addEventListener('click', setDefaultOpts);
 
   initPresetDetailPanels();
+  initPresetPopoverTouch();
 
   document.querySelectorAll('.preset-btn').forEach(btn => {
     btn.addEventListener('click', () => applyOutputPreset(btn.dataset.preset));
   });
 
-  document.querySelectorAll('.preset-info-btn').forEach(btn => {
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      togglePresetDetail(btn);
-    });
-  });
-
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeAllPresetDetails();
+    if (e.key === 'Escape') closeAllPresetPopoverPins();
   });
 
-  document.getElementById('options-card').addEventListener('click', e => {
-    if (e.target.closest('.preset-info-btn') || e.target.closest('.preset-detail-panel')) return;
-    if (!e.target.closest('.preset-card-top')) closeAllPresetDetails();
-  });
-
-  ['opt-strip-www', 'opt-out-with-scheme', 'opt-out-no-scheme', 'opt-out-ports'].forEach(id => {
-    document.getElementById(id).addEventListener('change', syncPresetFromDom);
+  ALL_OPTION_CHECKBOX_IDS.forEach(id => {
+    document.getElementById(id).addEventListener('change', onAnyOptionCheckboxChange);
   });
 
   // File upload
@@ -937,11 +1010,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-copy]').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = {
-        'final-list':   'out-final-list',
-        'with-scheme':  'out-with-scheme',
-        'no-scheme':    'out-no-scheme',
-        'ports-only':   'out-ports-only',
-        'skipped-list': 'out-skipped-list',
+        'final-list':     'out-final-list',
+        'final-list-ios': 'out-final-list-ios',
+        'with-scheme':    'out-with-scheme',
+        'no-scheme':      'out-no-scheme',
+        'ports-only':     'out-ports-only',
+        'skipped-list':   'out-skipped-list',
       }[btn.dataset.copy];
       const text = document.getElementById(id).value;
       navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard!'));
@@ -952,18 +1026,20 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-download]').forEach(btn => {
     btn.addEventListener('click', () => {
       const map = {
-        'final-list':  { id: 'out-final-list',  name: 'urls-final-list.json' },
-        'with-scheme': { id: 'out-with-scheme',  name: 'urls-with-scheme.json' },
-        'no-scheme':   { id: 'out-no-scheme',    name: 'urls-no-scheme.json' },
-        'ports-only':  { id: 'out-ports-only',   name: 'urls-ports-only.json' },
+        'final-list':     { id: 'out-final-list',     name: 'urls-final-list.json',     kind: 'json' },
+        'final-list-ios': { id: 'out-final-list-ios', name: 'urls-final-list-ios.txt', kind: 'text' },
+        'with-scheme':    { id: 'out-with-scheme',    name: 'urls-with-scheme.json',    kind: 'json' },
+        'no-scheme':      { id: 'out-no-scheme',      name: 'urls-no-scheme.json',      kind: 'json' },
+        'ports-only':     { id: 'out-ports-only',     name: 'urls-ports-only.json',     kind: 'json' },
       };
       const cfg = map[btn.dataset.download];
       if (!cfg) return;
       const content = document.getElementById(cfg.id).value;
-      downloadJson(content, cfg.name);
+      if (cfg.kind === 'text') downloadText(content, cfg.name);
+      else downloadJson(content, cfg.name);
     });
   });
 
   updateInputSearch();
-  syncPresetFromDom();
+  initPresetSelectionState();
 });

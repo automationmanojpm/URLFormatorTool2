@@ -38,13 +38,24 @@ function parseCsvRow(text) {
   return results;
 }
 
+function parseUnquotedBracketUrlList(text) {
+  const t = text.trim();
+  if (!t.startsWith('[') || !t.endsWith(']')) return null;
+  const inner = t.slice(1, -1).trim();
+  if (!inner) return [];
+  return inner.split(/,(?=https?:\/\/)/i).map(s => s.trim()).filter(Boolean);
+}
+
 function parseInput(text, formatHint = 'auto') {
   const format = formatHint === 'auto' ? detectFormat(text) : formatHint;
   if (format === 'json') {
     try {
       const parsed = JSON.parse(text.trim());
       if (Array.isArray(parsed)) return parsed.map(String);
-    } catch {}
+    } catch {
+      const bracket = parseUnquotedBracketUrlList(text.trim());
+      if (bracket !== null) return bracket;
+    }
   }
   if (format === 'csv') {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -80,9 +91,11 @@ function cleanEntry(raw, opts = DEFAULT_OPTS) {
   s = s.replace(/[/*]+$/, '').trim();
   if (!s) return null;
   if (opts.fixSchemes) s = s.replace(/^(https?:)\/(?!\/)/i, '$1//');
+  let hadHttpFamily = false;
   const schemeM = s.match(/^([a-z][a-z0-9+.-]*):/i);
-  if (schemeM) {
+  if (schemeM && !schemeM[1].includes('.')) {
     const scheme = schemeM[1].toLowerCase();
+    if (['http', 'https'].includes(scheme)) hadHttpFamily = true;
     if (opts.filterNonHttp && !['http', 'https'].includes(scheme)) return null;
     s = s.slice(schemeM[0].length).replace(/^\/\//, '');
   } else {
@@ -109,12 +122,33 @@ function cleanEntry(raw, opts = DEFAULT_OPTS) {
   if (opts.dropIncompleteQuery && /[=&]$/.test(full)) return null;
   const hasPort = /:\d+/.test(hostPort);
   if (!/\.[a-z]{2,}(:\d+)?([/?#].*)?$/i.test(full)) return null;
-  return { withScheme: 'https://' + full, noScheme: hasPort ? null : full, hasPort };
+  const dedupKey = 'https://' + full;
+  const noScheme = hasPort ? null : full;
+  const omitSyntheticHttps = !opts.addScheme && !hadHttpFamily && !hasPort;
+  const withScheme = omitSyntheticHttps ? null : dedupKey;
+  return { withScheme, noScheme, hasPort, dedupKey };
 }
 
 /* ── Test runner ── */
 
 let pass = 0, fail = 0;
+
+function testOpts(label, input, opts, expectedWith, expectedNo = undefined) {
+  const result = cleanEntry(input, opts);
+  const gotWith = result ? result.withScheme : null;
+  const gotNo   = result ? result.noScheme   : null;
+  const okWith  = gotWith === expectedWith;
+  const okNo    = expectedNo === undefined ? true : gotNo === expectedNo;
+  if (okWith && okNo) {
+    console.log(`  ✓ ${label}`);
+    pass++;
+  } else {
+    console.log(`  ✗ ${label}`);
+    if (!okWith) console.log(`      withScheme: expected "${expectedWith}" got "${gotWith}"`);
+    if (!okNo)   console.log(`      noScheme:   expected "${expectedNo}"   got "${gotNo}"`);
+    fail++;
+  }
+}
 
 function test(label, input, expectedWith, expectedNo = undefined) {
   const result = cleanEntry(input);
@@ -166,6 +200,26 @@ testParse('JSON array',
   'auto',
   ['https://a.com', 'https://b.com']
 );
+
+testParse('iOS / MDM unquoted bracket list',
+  '[https://idfc-first-bank-ltd.anypoint.mulesoft.com,https://idfcfirstbankdev.service-now.com]',
+  'auto',
+  ['https://idfc-first-bank-ltd.anypoint.mulesoft.com', 'https://idfcfirstbankdev.service-now.com']
+);
+
+function toIosManagedAppConfigArray(arr) {
+  if (arr.length === 0) return '[]';
+  return '[' + arr.map(v => String(v)).join(',') + ']';
+}
+
+const iosFmt = toIosManagedAppConfigArray(['https://a.com', 'b.com']);
+if (iosFmt === '[https://a.com,b.com]') {
+  console.log('  ✓ toIosManagedAppConfigArray');
+  pass++;
+} else {
+  console.log(`  ✗ toIosManagedAppConfigArray: got ${JSON.stringify(iosFmt)}`);
+  fail++;
+}
 
 testParse('Single-line CSV (auto-detect)',
   '"https://a.com","https://b.com","https://c.com"',
@@ -304,6 +358,11 @@ test('URL with port (withScheme only, noScheme=null)',
   'https://internal.company.com:8080', null
 );
 
+test('Bare host:port (no scheme, not parsed as fake scheme)',
+  'internal.com:8080',
+  'https://internal.com:8080', null
+);
+
 test('Port + path',
   'https://service.company.com:8453/api/v1',
   'https://service.company.com:8453/api/v1', null
@@ -383,6 +442,15 @@ test('Subdomain + port + path (real-world from BYOD)',
 );
 
 
+console.log('\n═══ ADD HTTPS TO BARE DOMAINS (addScheme) ═══\n');
+
+const noAdd = { ...DEFAULT_OPTS, addScheme: false };
+testOpts('addScheme off — bare domain has no synthetic withScheme', 'company.com', noAdd, null, 'company.com');
+testOpts('addScheme off — explicit https kept', 'https://company.com', noAdd, 'https://company.com', 'company.com');
+testOpts('addScheme off — bare host:port still uses https in withScheme', 'internal.com:8080', noAdd, 'https://internal.com:8080', null);
+testOpts('addScheme on — bare domain (default)', 'company.com', DEFAULT_OPTS, 'https://company.com', 'company.com');
+
+
 console.log('\n═══ GLUED URL SPLITTING ═══\n');
 
 const glued = 'https://a.comhttps://b.com';
@@ -401,8 +469,8 @@ let validCount = 0, dupeCount = 0;
 for (const e of entries) {
   const c = cleanEntry(e);
   if (!c) continue;
-  if (seen.has(c.withScheme)) { dupeCount++; continue; }
-  seen.add(c.withScheme);
+  if (seen.has(c.dedupKey)) { dupeCount++; continue; }
+  seen.add(c.dedupKey);
   validCount++;
 }
 const dupeOk = validCount === 2 && dupeCount === 2;
